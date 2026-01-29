@@ -108,13 +108,14 @@ download_mihomo() {
         return 1
     fi
 
-    # Проверка SHA256
+    # Проверка SHA256 (если доступен)
     print_step "Проверка целостности файла..."
     local checksum_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}.sha256"
     local expected_hash
-    expected_hash=$(curl -sL "$checksum_url" 2>/dev/null | awk '{print $1}')
+    expected_hash=$(curl -sL --fail "$checksum_url" 2>/dev/null | awk '{print $1}')
 
-    if [[ -n "$expected_hash" ]]; then
+    # Проверяем что хэш выглядит как SHA256 (64 hex символа)
+    if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ ]]; then
         local actual_hash
         actual_hash=$(shasum -a 256 "$DOSTUP_DIR/mihomo.gz" | awk '{print $1}')
         if [[ "$expected_hash" != "$actual_hash" ]]; then
@@ -140,11 +141,22 @@ download_mihomo() {
     print_success "Mihomo $version установлен"
 }
 
-# Диалог ввода (osascript)
+# Диалог ввода (osascript с fallback на терминал)
 ask_input() {
     local prompt="$1"
     local default="$2"
-    osascript -e "set result to text returned of (display dialog \"$prompt\" default answer \"$default\" buttons {\"OK\"} default button 1)" 2>/dev/null
+    local result
+
+    # Пробуем osascript (GUI диалог)
+    result=$(osascript -e "set result to text returned of (display dialog \"$prompt\" default answer \"$default\" buttons {\"OK\"} default button 1)" 2>/dev/null)
+
+    # Если osascript не сработал - используем терминал
+    if [[ -z "$result" ]]; then
+        echo ""
+        read -p "$prompt " result
+    fi
+
+    echo "$result"
 }
 
 # Валидация URL
@@ -463,8 +475,8 @@ if pgrep -x "mihomo" > /dev/null; then
     echo "API: 127.0.0.1:9090"
     echo ""
     echo "Окно закроется через 5 секунд..."
-    # Запускаем закрытие в фоне и сразу выходим, чтобы не было предупреждения
-    (sleep 5 && osascript -e 'tell application "Terminal" to close front window saving no' &) 2>/dev/null
+    sleep 5
+    osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || read -p "Нажмите Enter для закрытия..."
     exit 0
 else
     echo -e "${RED}✗ Не удалось запустить Mihomo${NC}"
@@ -498,7 +510,8 @@ if ! pgrep -x "mihomo" > /dev/null; then
     echo -e "${YELLOW}Mihomo не запущен${NC}"
     echo ""
     echo "Окно закроется через 2 секунды..."
-    (sleep 2 && osascript -e 'tell application "Terminal" to close front window saving no' &) 2>/dev/null
+    sleep 2
+    osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || read -p "Нажмите Enter для закрытия..."
     exit 0
 fi
 
@@ -514,7 +527,8 @@ if ! pgrep -x "mihomo" > /dev/null; then
     echo -e "${GREEN}✓ Mihomo остановлен${NC}"
     echo ""
     echo "Окно закроется через 3 секунды..."
-    (sleep 3 && osascript -e 'tell application "Terminal" to close front window saving no' &) 2>/dev/null
+    sleep 3
+    osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || read -p "Нажмите Enter для закрытия..."
     exit 0
 else
     echo -e "${RED}✗ Не удалось остановить Mihomo${NC}"
@@ -565,7 +579,8 @@ start_mihomo() {
 
 # Показ финального сообщения
 show_success_message() {
-    osascript << EOF
+    # Пробуем GUI диалог, если не работает - просто пропускаем
+    osascript << EOF 2>/dev/null
 display dialog "Mihomo успешно установлен и запущен!
 
 Панель управления:
@@ -679,5 +694,6 @@ fi
 
 echo ""
 echo "Окно закроется через 5 секунд..."
-(sleep 5 && osascript -e 'tell application "Terminal" to close front window saving no' &) 2>/dev/null
+sleep 5
+osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || read -p "Нажмите Enter для закрытия..."
 exit 0

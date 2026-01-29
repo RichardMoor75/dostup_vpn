@@ -120,19 +120,24 @@ if (-not (Invoke-DownloadWithRetry $downloadUrl $zipPath)) {
     exit 1
 }
 
-# Verify SHA256
+# Verify SHA256 (if available)
 Write-Step 'Verifying file integrity...'
 $checksumUrl = "https://github.com/MetaCubeX/mihomo/releases/download/$version/$filename.sha256"
 try {
-    $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content.Trim().Split()[0]
-    $actualHash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
-    if ($expectedHash.ToUpper() -ne $actualHash.ToUpper()) {
-        Write-Fail 'Hash mismatch! File corrupted.'
-        Remove-Item $zipPath -Force
-        Read-Host 'Press Enter to close'
-        exit 1
+    $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0]
+    # Check if it looks like SHA256 (64 hex chars)
+    if ($expectedHash -match '^[a-fA-F0-9]{64}$') {
+        $actualHash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+        if ($expectedHash.ToUpper() -ne $actualHash.ToUpper()) {
+            Write-Fail 'Hash mismatch! File corrupted.'
+            Remove-Item $zipPath -Force
+            Read-Host 'Press Enter to close'
+            exit 1
+        }
+        Write-OK 'Hash verified'
+    } else {
+        Write-Info 'SHA256 not found, skipping verification'
     }
-    Write-OK 'Hash verified'
 } catch {
     Write-Info 'SHA256 not found, skipping verification'
 }

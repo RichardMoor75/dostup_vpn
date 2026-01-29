@@ -2,24 +2,20 @@
    DOSTUP — Инструкция по установке
 =====================================
 
-ШАГ 1: Скачайте файл dostup-install.command
-
-ШАГ 2: Откройте Terminal
+ШАГ 1: Откройте Terminal
    • Нажмите Command + Пробел
    • Введите "Terminal" и нажмите Enter
 
-ШАГ 3: Скопируйте и вставьте эту команду в Terminal:
+ШАГ 2: Скопируйте и вставьте эту команду:
 
-   xattr -cr ~/Downloads/dostup-install.command && chmod +x ~/Downloads/dostup-install.command && ~/Downloads/dostup-install.command
+   curl -sL https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.command | bash
 
-   (Если файл в другой папке — замените ~/Downloads/ на путь к файлу)
-
-ШАГ 4: Нажмите Enter
+ШАГ 3: Нажмите Enter
    • Откроется окно установки
    • Введите URL подписки когда попросят
    • При запросе пароля — введите пароль от Mac
 
-ШАГ 5: Готово!
+ШАГ 4: Готово!
    На рабочем столе появятся:
    • "Dostup Start" — для запуска
    • "Dostup Stop" — для остановки
@@ -43,9 +39,6 @@ https://metacubex.github.io/metacubexd/
 -------------------------------------
 ВОЗМОЖНЫЕ ПРОБЛЕМЫ
 -------------------------------------
-"Приложение повреждено":
-   → Выполните команду из ШАГа 3
-
 "Operation not permitted":
    → Дайте Terminal доступ к диску:
      Системные настройки → Конфиденциальность и безопасность
