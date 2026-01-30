@@ -603,13 +603,25 @@ print_header
 # Проверки
 check_macos
 
-# Проверка: первый запуск или нет?
-if [[ -f "$MIHOMO_BIN" && -f "$SETTINGS_FILE" ]]; then
-    print_info "Обнаружена существующая установка"
-    print_info "Запустите 'Dostup Start' с рабочего стола для запуска"
-    echo ""
-    read -p "Нажмите Enter для закрытия..."
-    exit 0
+# Сохраняем старую подписку если есть
+OLD_SUB_URL=""
+if [[ -f "$SETTINGS_FILE" ]]; then
+    OLD_SUB_URL=$(python3 -c "import json; print(json.load(open('$SETTINGS_FILE')).get('subscription_url', ''))" 2>/dev/null || true)
+fi
+
+# Остановка mihomo если запущен
+if pgrep -x "mihomo" > /dev/null; then
+    print_step "Остановка запущенного Mihomo..."
+    sudo pkill mihomo 2>/dev/null || true
+    sleep 2
+    print_success "Mihomo остановлен"
+fi
+
+# Удаление старой установки
+if [[ -d "$DOSTUP_DIR" ]]; then
+    print_step "Удаление старой установки..."
+    rm -rf "$DOSTUP_DIR"
+    print_success "Старая установка удалена"
 fi
 
 # Проверка интернета
@@ -634,7 +646,26 @@ fi
 
 # Запрос URL подписки
 print_step "Настройка подписки..."
-SUB_URL=$(ask_input "Введите URL подписки (конфига):" "")
+
+if [[ -n "$OLD_SUB_URL" ]]; then
+    # Есть старая подписка — спрашиваем что делать
+    print_info "Найдена предыдущая подписка"
+    echo ""
+    echo "1) Оставить текущую подписку"
+    echo "2) Ввести новую подписку"
+    echo ""
+    read -p "Выберите (1 или 2): " choice
+
+    if [[ "$choice" == "2" ]]; then
+        SUB_URL=$(ask_input "Введите URL подписки (конфига):" "")
+    else
+        SUB_URL="$OLD_SUB_URL"
+        print_success "Используется предыдущая подписка"
+    fi
+else
+    # Нет старой подписки — запрашиваем новую
+    SUB_URL=$(ask_input "Введите URL подписки (конфига):" "")
+fi
 
 if [[ -z "$SUB_URL" ]]; then
     print_error "URL подписки не указан"

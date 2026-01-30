@@ -53,6 +53,30 @@ function Invoke-DownloadWithRetry($url, $output, $maxRetries = 3) {
     return $false
 }
 
+function Expand-ZipFile($zipPath, $destPath) {
+    if ($PSVersionTable.PSVersion.Major -ge 5) {
+        Expand-Archive -Path $zipPath -DestinationPath $destPath -Force
+    } else {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destPath)
+    }
+}
+
+function Get-FileSHA256($path) {
+    if ($PSVersionTable.PSVersion.Major -ge 4) {
+        return (Get-FileHash -Path $path -Algorithm SHA256).Hash
+    } else {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $stream = [System.IO.File]::OpenRead($path)
+        try {
+            $hash = $sha256.ComputeHash($stream)
+            return [BitConverter]::ToString($hash) -replace '-', ''
+        } finally {
+            $stream.Close()
+        }
+    }
+}
+
 function Backup-Config {
     if (Test-Path $CONFIG_FILE) {
         Copy-Item $CONFIG_FILE "$CONFIG_FILE.backup" -Force
@@ -71,11 +95,29 @@ Write-Host '       Dostup Installer for Mihomo' -ForegroundColor Blue
 Write-Host '============================================' -ForegroundColor Blue
 Write-Host ''
 
-if ((Test-Path $MIHOMO_BIN) -and (Test-Path $SETTINGS_FILE)) {
-    Write-Host 'Installation found. Use Dostup Start on desktop.' -ForegroundColor Blue
-    Write-Host ''
-    Read-Host 'Press Enter to close'
-    exit
+# Save old subscription if exists
+$oldSubUrl = ''
+if (Test-Path $SETTINGS_FILE) {
+    try {
+        $oldSettings = Get-Content $SETTINGS_FILE -Raw | ConvertFrom-Json
+        $oldSubUrl = $oldSettings.subscription_url
+    } catch { }
+}
+
+# Stop mihomo if running
+$mihomoProcess = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
+if ($mihomoProcess) {
+    Write-Step 'Stopping running Mihomo...'
+    Stop-Process -Name 'mihomo' -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Write-OK 'Mihomo stopped'
+}
+
+# Remove old installation
+if (Test-Path $DOSTUP_DIR) {
+    Write-Step 'Removing old installation...'
+    Remove-Item -Recurse -Force $DOSTUP_DIR
+    Write-OK 'Old installation removed'
 }
 
 Write-Step 'Checking internet...'
@@ -127,7 +169,7 @@ try {
     $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0]
     # Check if it looks like SHA256 (64 hex chars)
     if ($expectedHash -match '^[a-fA-F0-9]{64}$') {
-        $actualHash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+        $actualHash = Get-FileSHA256 $zipPath
         if ($expectedHash.ToUpper() -ne $actualHash.ToUpper()) {
             Write-Fail 'Hash mismatch! File corrupted.'
             Remove-Item $zipPath -Force
@@ -143,7 +185,7 @@ try {
 }
 
 try {
-    Expand-Archive -Path $zipPath -DestinationPath $DOSTUP_DIR -Force
+    Expand-ZipFile $zipPath $DOSTUP_DIR
     Remove-Item $zipPath -Force
     $exeFile = Get-ChildItem -Path $DOSTUP_DIR -Filter 'mihomo*.exe' | Select-Object -First 1
     if ($exeFile -and $exeFile.Name -ne 'mihomo.exe') {
@@ -158,7 +200,27 @@ try {
 
 Write-Step 'Setup subscription...'
 Add-Type -AssemblyName Microsoft.VisualBasic
-$subUrl = [Microsoft.VisualBasic.Interaction]::InputBox('Enter subscription URL (config):', 'Dostup', '')
+
+$subUrl = ''
+if (-not [string]::IsNullOrEmpty($oldSubUrl)) {
+    # Ask: keep old or enter new
+    Write-Info 'Previous subscription found'
+    Write-Host ''
+    Write-Host '1) Keep current subscription'
+    Write-Host '2) Enter new subscription'
+    Write-Host ''
+    $choice = Read-Host 'Choose (1 or 2)'
+
+    if ($choice -eq '2') {
+        $subUrl = [Microsoft.VisualBasic.Interaction]::InputBox('Enter subscription URL (config):', 'Dostup', '')
+    } else {
+        $subUrl = $oldSubUrl
+        Write-OK 'Using previous subscription'
+    }
+} else {
+    $subUrl = [Microsoft.VisualBasic.Interaction]::InputBox('Enter subscription URL (config):', 'Dostup', '')
+}
+
 if ([string]::IsNullOrEmpty($subUrl)) {
     Write-Fail 'Subscription URL not provided'
     Read-Host 'Press Enter to close'
@@ -250,6 +312,15 @@ function Test-ValidYaml($path) {
     } catch { return $false }
 }
 
+function Expand-ZipFile($zipPath, $destPath) {
+    if ($PSVersionTable.PSVersion.Major -ge 5) {
+        Expand-Archive -Path $zipPath -DestinationPath $destPath -Force
+    } else {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destPath)
+    }
+}
+
 Write-Host ''
 Write-Host '=== Dostup Start ===' -ForegroundColor Blue
 Write-Host ''
@@ -278,7 +349,7 @@ try {
         $fn = "mihomo-windows-$arch-$latest.zip"
         $url = "https://github.com/MetaCubeX/mihomo/releases/download/$latest/$fn"
         if (Invoke-DownloadWithRetry $url "$DOSTUP_DIR\m.zip") {
-            Expand-Archive -Path "$DOSTUP_DIR\m.zip" -DestinationPath $DOSTUP_DIR -Force
+            Expand-ZipFile "$DOSTUP_DIR\m.zip" $DOSTUP_DIR
             Remove-Item "$DOSTUP_DIR\m.zip" -Force
             $exe = Get-ChildItem -Path $DOSTUP_DIR -Filter 'mihomo*.exe' | Select-Object -First 1
             if ($exe -and $exe.Name -ne 'mihomo.exe') {
@@ -392,6 +463,49 @@ $stopLnk.WorkingDirectory = $DOSTUP_DIR
 $stopLnk.Save()
 
 Write-OK 'Shortcuts created'
+
+Write-Step 'Configuring firewall...'
+try {
+    # Windows 8+ = version 6.2+
+    $isWin8Plus = [Environment]::OSVersion.Version -ge [Version]"6.2"
+
+    if ($isWin8Plus) {
+        # PowerShell cmdlets for Windows 8+
+        Get-NetFirewallRule -DisplayName "*mihomo*" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Action -eq 'Block' } |
+            Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+        Get-NetFirewallRule -DisplayName "Mihomo Proxy*" -ErrorAction SilentlyContinue |
+            Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+        New-NetFirewallRule -DisplayName "Mihomo Proxy (Inbound)" `
+            -Direction Inbound `
+            -Program $MIHOMO_BIN `
+            -Action Allow `
+            -Profile Any `
+            -ErrorAction SilentlyContinue | Out-Null
+
+        New-NetFirewallRule -DisplayName "Mihomo Proxy (Outbound)" `
+            -Direction Outbound `
+            -Program $MIHOMO_BIN `
+            -Action Allow `
+            -Profile Any `
+            -ErrorAction SilentlyContinue | Out-Null
+    } else {
+        # netsh for Windows 7
+        $null = netsh advfirewall firewall delete rule name="Mihomo Proxy (Inbound)" 2>$null
+        $null = netsh advfirewall firewall delete rule name="Mihomo Proxy (Outbound)" 2>$null
+
+        $null = netsh advfirewall firewall add rule name="Mihomo Proxy (Inbound)" `
+            dir=in action=allow program="$MIHOMO_BIN" enable=yes profile=any 2>$null
+        $null = netsh advfirewall firewall add rule name="Mihomo Proxy (Outbound)" `
+            dir=out action=allow program="$MIHOMO_BIN" enable=yes profile=any 2>$null
+    }
+
+    Write-OK 'Firewall configured'
+} catch {
+    Write-Info 'Firewall: manual configuration may be needed'
+}
 
 Write-Step 'Starting Mihomo...'
 Write-Host ''
