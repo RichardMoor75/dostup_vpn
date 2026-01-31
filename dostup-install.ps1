@@ -518,40 +518,14 @@ Write-OK 'Shortcut created'
 
 Write-Step 'Configuring firewall...'
 try {
-    # Windows 8+ = version 6.2+
-    $isWin8Plus = [Environment]::OSVersion.Version -ge [Version]"6.2"
+    # netsh requires admin rights - run all commands in one elevated cmd to avoid multiple UAC prompts
+    $fwCommands = @(
+        "netsh advfirewall firewall delete rule name=all program=`"$MIHOMO_BIN`"",
+        "netsh advfirewall firewall add rule name=`"Mihomo Proxy (Inbound)`" dir=in action=allow program=`"$MIHOMO_BIN`" enable=yes profile=any",
+        "netsh advfirewall firewall add rule name=`"Mihomo Proxy (Outbound)`" dir=out action=allow program=`"$MIHOMO_BIN`" enable=yes profile=any"
+    ) -join ' & '
 
-    if ($isWin8Plus) {
-        # PowerShell cmdlets for Windows 8+
-        # Remove ALL existing rules for mihomo.exe (by program path, not display name)
-        Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object {
-            try {
-                ($_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program -like "*mihomo.exe"
-            } catch { $false }
-        } | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-
-        New-NetFirewallRule -DisplayName "Mihomo Proxy (Inbound)" `
-            -Direction Inbound `
-            -Program $MIHOMO_BIN `
-            -Action Allow `
-            -Profile Any `
-            -ErrorAction SilentlyContinue | Out-Null
-
-        New-NetFirewallRule -DisplayName "Mihomo Proxy (Outbound)" `
-            -Direction Outbound `
-            -Program $MIHOMO_BIN `
-            -Action Allow `
-            -Profile Any `
-            -ErrorAction SilentlyContinue | Out-Null
-    } else {
-        # netsh for Windows 7 - delete all rules for mihomo.exe by program
-        $null = netsh advfirewall firewall delete rule name=all program="$MIHOMO_BIN" 2>$null
-
-        $null = netsh advfirewall firewall add rule name="Mihomo Proxy (Inbound)" `
-            dir=in action=allow program="$MIHOMO_BIN" enable=yes profile=any 2>$null
-        $null = netsh advfirewall firewall add rule name="Mihomo Proxy (Outbound)" `
-            dir=out action=allow program="$MIHOMO_BIN" enable=yes profile=any 2>$null
-    }
+    Start-Process -FilePath 'cmd' -ArgumentList "/c $fwCommands" -Verb RunAs -Wait -WindowStyle Hidden
 
     Write-OK 'Firewall configured'
 } catch {
