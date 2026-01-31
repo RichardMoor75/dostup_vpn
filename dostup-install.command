@@ -25,6 +25,7 @@ DESKTOP_DIR="$HOME/Desktop"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
 GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+ICON_URL="https://files.richard-moor.ru/Install/dostup_vpn/icon.icns"
 
 # --- Функции ---
 
@@ -50,6 +51,10 @@ print_error() {
 
 print_info() {
     echo -e "${BLUE}ℹ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠ $1${NC}"
 }
 
 # Проверка macOS
@@ -544,6 +549,36 @@ CONTROLSCRIPT
     rm -f "$DOSTUP_DIR/dostup-stop.command" 2>/dev/null
 }
 
+# Скачивание иконки
+download_icon() {
+    print_step "Скачивание иконки..."
+    if download_with_retry "$ICON_URL" "$DOSTUP_DIR/icon.icns"; then
+        print_success "Иконка скачана"
+        return 0
+    else
+        print_warning "Не удалось скачать иконку (будет использована стандартная)"
+        return 1
+    fi
+}
+
+# Применение иконки к файлу (macOS)
+apply_icon() {
+    local target="$1"
+    local icon="$DOSTUP_DIR/icon.icns"
+
+    if [[ ! -f "$icon" ]]; then
+        return 1
+    fi
+
+    # Используем JavaScript for Automation для применения иконки
+    osascript -l JavaScript -e "
+        ObjC.import('AppKit');
+        var workspace = \$.NSWorkspace.sharedWorkspace;
+        var image = \$.NSImage.alloc.initWithContentsOfFile('$icon');
+        workspace.setIconForFileOptions(image, '$target', 0);
+    " 2>/dev/null
+}
+
 # Создание ярлыка на рабочем столе
 create_desktop_shortcuts() {
     print_step "Создание ярлыка на рабочем столе..."
@@ -555,6 +590,11 @@ create_desktop_shortcuts() {
     # Создаём новый единый ярлык
     cp "$DOSTUP_DIR/Dostup_VPN.command" "$DESKTOP_DIR/Dostup_VPN.command"
     chmod +x "$DESKTOP_DIR/Dostup_VPN.command"
+
+    # Применяем иконку
+    if apply_icon "$DESKTOP_DIR/Dostup_VPN.command"; then
+        apply_icon "$DOSTUP_DIR/Dostup_VPN.command"
+    fi
 
     print_success "Ярлык создан на рабочем столе"
 }
@@ -706,6 +746,9 @@ fi
 
 # Скачивание geo-баз
 download_geo
+
+# Скачивание иконки
+download_icon
 
 # Создание скрипта управления
 print_step "Создание скрипта управления..."

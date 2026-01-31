@@ -13,6 +13,7 @@ $DESKTOP = [Environment]::GetFolderPath('Desktop')
 $MIHOMO_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest'
 $GEOIP_URL = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat'
 $GEOSITE_URL = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat'
+$ICON_URL = 'https://files.richard-moor.ru/Install/dostup_vpn/icon.ico'
 
 function Write-Step($text) { Write-Host "> $text" -ForegroundColor Yellow }
 function Write-OK($text) { Write-Host "[OK] $text" -ForegroundColor Green }
@@ -488,6 +489,14 @@ Remove-Item "$DOSTUP_DIR\dostup-stop.ps1" -Force -ErrorAction SilentlyContinue
 
 Write-OK 'Control script created'
 
+Write-Step 'Downloading icon...'
+$iconPath = "$DOSTUP_DIR\icon.ico"
+if (Invoke-DownloadWithRetry $ICON_URL $iconPath) {
+    Write-OK 'Icon downloaded'
+} else {
+    Write-Fail 'Icon download failed (shortcut will use default icon)'
+}
+
 Write-Step 'Creating desktop shortcut...'
 $WshShell = New-Object -ComObject WScript.Shell
 
@@ -500,6 +509,9 @@ $vpnLnk = $WshShell.CreateShortcut("$DESKTOP\Dostup_VPN.lnk")
 $vpnLnk.TargetPath = "powershell.exe"
 $vpnLnk.Arguments = "-ExecutionPolicy Bypass -File `"$DOSTUP_DIR\Dostup_VPN.ps1`""
 $vpnLnk.WorkingDirectory = $DOSTUP_DIR
+if (Test-Path $iconPath) {
+    $vpnLnk.IconLocation = "$iconPath,0"
+}
 $vpnLnk.Save()
 
 Write-OK 'Shortcut created'
