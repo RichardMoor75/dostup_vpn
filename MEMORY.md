@@ -53,6 +53,12 @@ irm https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.ps1 | iex
 - [x] Переустановка: всегда удаляет старую установку, останавливает mihomo, спрашивает о подписке
 - [x] Единый скрипт управления `Dostup_VPN` вместо отдельных start/stop (один ярлык на рабочем столе)
 - [x] Кастомная иконка (котик) для ярлыков — автоскачивание и применение через JXA (macOS) / IconLocation (Windows)
+- [x] Windows: HTML-фильтр в валидаторе YAML (защита от ошибок сервера)
+- [x] Geo-базы: дата обновления записывается только при успешном скачивании
+- [x] Windows control script: безопасный парсинг даты с try/catch
+- [x] macOS: защита от injection в osascript (экранирование кавычек)
+- [x] macOS: защита от injection в Python (передача через env variables)
+- [x] Остановка mihomo: цикл ожидания с timeout вместо фиксированного sleep (race condition fix)
 
 ## ВАЖНО: Workflow
 - **После любых изменений в скриптах — ВСЕГДА копировать в `/media/rishat/Cloud/rawfiles/rawfiles/Install/dostup_vpn/`**
@@ -65,3 +71,5 @@ irm https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.ps1 | iex
 - Windows Firewall: автонастройка через netsh с UAC (удаляет все правила для mihomo.exe включая блокировки, создаёт разрешающие)
 - Windows 7/8 поддерживается: fallback для PowerShell < 5 (Expand-ZipFile, Get-FileSHA256) и netsh для брандмауэра
 - macOS Application Firewall: автонастройка через socketfilterfw (--add и --unblockapp)
+- Безопасность: все входные данные экранируются перед использованием в osascript/python
+- Остановка процесса: используется цикл ожидания (до 10 сек) для надёжности

@@ -152,8 +152,14 @@ ask_input() {
     local default="$2"
     local result
 
+    # Экранируем кавычки и бэкслеши для AppleScript
+    local safe_prompt="${prompt//\\/\\\\}"
+    safe_prompt="${safe_prompt//\"/\\\"}"
+    local safe_default="${default//\\/\\\\}"
+    safe_default="${safe_default//\"/\\\"}"
+
     # Пробуем osascript (GUI диалог)
-    result=$(osascript -e "set result to text returned of (display dialog \"$prompt\" default answer \"$default\" buttons {\"OK\"} default button 1)" 2>/dev/null)
+    result=$(osascript -e "set result to text returned of (display dialog \"$safe_prompt\" default answer \"$safe_default\" buttons {\"OK\"} default button 1)" 2>/dev/null)
 
     # Если osascript не сработал - используем терминал
     if [[ -z "$result" ]]; then
@@ -235,12 +241,16 @@ update_settings() {
     fi
 
     # Используем Python для JSON (есть на всех Mac)
-    python3 << EOF
-import json
-with open("$SETTINGS_FILE", "r") as f:
+    # Передаём значения через env variables для безопасности
+    SETTINGS_FILE="$SETTINGS_FILE" KEY="$key" VALUE="$value" python3 << 'EOF'
+import json, os
+settings_file = os.environ['SETTINGS_FILE']
+key = os.environ['KEY']
+value = os.environ['VALUE']
+with open(settings_file, "r") as f:
     data = json.load(f)
-data["$key"] = "$value"
-with open("$SETTINGS_FILE", "w") as f:
+data[key] = value
+with open(settings_file, "w") as f:
     json.dump(data, f, indent=2)
 EOF
 }
@@ -249,7 +259,7 @@ EOF
 read_settings() {
     local key="$1"
     if [[ -f "$SETTINGS_FILE" ]]; then
-        python3 -c "import json; print(json.load(open('$SETTINGS_FILE')).get('$key', ''))" 2>/dev/null
+        SETTINGS_FILE="$SETTINGS_FILE" KEY="$key" python3 -c "import json, os; print(json.load(open(os.environ['SETTINGS_FILE'])).get(os.environ['KEY'], ''))" 2>/dev/null
     fi
 }
 
@@ -331,19 +341,22 @@ GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/lates
 read_settings() {
     local key="$1"
     if [[ -f "$SETTINGS_FILE" ]]; then
-        python3 -c "import json; print(json.load(open('$SETTINGS_FILE')).get('$key', ''))" 2>/dev/null
+        SETTINGS_FILE="$SETTINGS_FILE" KEY="$key" python3 -c "import json, os; print(json.load(open(os.environ['SETTINGS_FILE'])).get(os.environ['KEY'], ''))" 2>/dev/null
     fi
 }
 
 update_settings() {
     local key="$1"
     local value="$2"
-    python3 << EOF
-import json
-with open("$SETTINGS_FILE", "r") as f:
+    SETTINGS_FILE="$SETTINGS_FILE" KEY="$key" VALUE="$value" python3 << 'EOF'
+import json, os
+settings_file = os.environ['SETTINGS_FILE']
+key = os.environ['KEY']
+value = os.environ['VALUE']
+with open(settings_file, "r") as f:
     data = json.load(f)
-data["$key"] = "$value"
-with open("$SETTINGS_FILE", "w") as f:
+data[key] = value
+with open(settings_file, "w") as f:
     json.dump(data, f, indent=2)
 EOF
 }
@@ -375,14 +388,19 @@ validate_yaml() {
 do_stop() {
     echo -e "${YELLOW}▶ Остановка Mihomo (требуется пароль администратора)...${NC}"
     echo ""
-    sudo pkill mihomo
-    sleep 2
+    sudo pkill -9 mihomo 2>/dev/null || true
+    # Ожидание с timeout
+    stop_timeout=10
+    while pgrep -x "mihomo" > /dev/null && [[ $stop_timeout -gt 0 ]]; do
+        sleep 1
+        stop_timeout=$((stop_timeout - 1))
+    done
     if ! pgrep -x "mihomo" > /dev/null; then
         echo -e "${GREEN}✓ Mihomo остановлен${NC}"
         return 0
     else
         echo -e "${RED}✗ Не удалось остановить Mihomo${NC}"
-        echo "Попробуйте: sudo pkill -9 mihomo"
+        echo "Попробуйте перезагрузить компьютер"
         return 1
     fi
 }
@@ -438,16 +456,29 @@ do_start() {
     fi
 
     # Обновление geo-баз (раз в 2 недели)
+    should_update_geo=false
     last_geo=$(read_settings "last_geo_update")
     if [[ -n "$last_geo" ]]; then
         last_ts=$(date -j -f "%Y-%m-%d" "$last_geo" "+%s" 2>/dev/null || echo 0)
         now_ts=$(date "+%s")
         diff_days=$(( (now_ts - last_ts) / 86400 ))
+        [[ $diff_days -ge 14 ]] && should_update_geo=true
+    else
+        should_update_geo=true
+    fi
 
-        if [[ $diff_days -ge 14 ]]; then
-            echo -e "${YELLOW}▶ Обновление geo-баз...${NC}"
-            curl -L -o "$DOSTUP_DIR/geoip.dat" "$GEOIP_URL" 2>/dev/null
-            curl -L -o "$DOSTUP_DIR/geosite.dat" "$GEOSITE_URL" 2>/dev/null
+    if $should_update_geo; then
+        echo -e "${YELLOW}▶ Обновление geo-баз...${NC}"
+        geo_ok=true
+        if ! download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat"; then
+            echo -e "${RED}✗ Не удалось скачать geoip.dat${NC}"
+            geo_ok=false
+        fi
+        if ! download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat"; then
+            echo -e "${RED}✗ Не удалось скачать geosite.dat${NC}"
+            geo_ok=false
+        fi
+        if $geo_ok; then
             update_settings "last_geo_update" "$(date +%Y-%m-%d)"
             echo -e "${GREEN}✓ Geo-базы обновлены${NC}"
         fi
@@ -661,7 +692,12 @@ fi
 if pgrep -x "mihomo" > /dev/null; then
     print_step "Остановка запущенного Mihomo..."
     sudo pkill -9 mihomo 2>/dev/null || true
-    sleep 3
+    # Ожидание с timeout вместо фиксированного sleep
+    stop_timeout=10
+    while pgrep -x "mihomo" > /dev/null && [[ $stop_timeout -gt 0 ]]; do
+        sleep 1
+        stop_timeout=$((stop_timeout - 1))
+    done
     # Проверка что остановился
     if pgrep -x "mihomo" > /dev/null; then
         print_error "Не удалось остановить Mihomo"

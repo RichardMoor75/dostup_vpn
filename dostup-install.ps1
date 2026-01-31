@@ -27,6 +27,10 @@ function Test-ValidUrl($url) {
 function Test-ValidYaml($path) {
     try {
         $content = Get-Content $path -Raw
+        # Проверяем что это не HTML-страница (ошибка сервера)
+        if ($content -match '(?i)<!DOCTYPE|<html|<head') {
+            return $false
+        }
         # Простая проверка на базовый YAML синтаксис
         if ($content -match '^\s*[\w-]+\s*:' -or $content -match '^\s*-\s+') {
             return $true
@@ -109,9 +113,18 @@ if (Test-Path $SETTINGS_FILE) {
 $mihomoProcess = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
 if ($mihomoProcess) {
     Write-Step 'Stopping running Mihomo...'
-    # Use taskkill with admin rights (same as stop script)
     Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
-    Start-Sleep -Seconds 3
+    # Wait with timeout
+    $stopTimeout = 10
+    while ((Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) -and $stopTimeout -gt 0) {
+        Start-Sleep -Seconds 1
+        $stopTimeout--
+    }
+    if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+        Write-Fail 'Could not stop Mihomo. Please restart your computer and try again.'
+        Read-Host 'Press Enter to close'
+        exit 1
+    }
     Write-OK 'Mihomo stopped'
 }
 
@@ -286,7 +299,9 @@ if ($geoSuccess) {
 $settings = @{
     subscription_url = $subUrl
     installed_version = $version
-    last_geo_update = (Get-Date -Format 'yyyy-MM-dd')
+}
+if ($geoSuccess) {
+    $settings.last_geo_update = (Get-Date -Format 'yyyy-MM-dd')
 }
 $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
 
@@ -323,6 +338,7 @@ function Invoke-DownloadWithRetry($url, $output) {
 function Test-ValidYaml($path) {
     try {
         $c = Get-Content $path -Raw
+        if ($c -match '(?i)<!DOCTYPE|<html|<head') { return $false }
         return ($c -match '^\s*[\w-]+\s*:' -or $c -match '^\s*-\s+')
     } catch { return $false }
 }
@@ -339,13 +355,18 @@ function Expand-ZipFile($zipPath, $destPath) {
 function Stop-Mihomo {
     Write-Step 'Stopping Mihomo (requires admin)...'
     Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
-    Start-Sleep -Seconds 2
+    # Wait with timeout
+    $stopTimeout = 10
+    while ((Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) -and $stopTimeout -gt 0) {
+        Start-Sleep -Seconds 1
+        $stopTimeout--
+    }
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
     if (-not $proc) {
         Write-OK 'Mihomo stopped'
         return $true
     } else {
-        Write-Fail 'Could not stop'
+        Write-Fail 'Could not stop. Try restarting your computer.'
         return $false
     }
 }
@@ -395,8 +416,16 @@ function Start-Mihomo {
         if (Test-Path "$CONFIG_FILE.backup") { Move-Item "$CONFIG_FILE.backup" $CONFIG_FILE -Force }
     }
 
-    $lastGeo = [DateTime]::Parse($settings.last_geo_update)
-    if (((Get-Date) - $lastGeo).Days -ge 14) {
+    # Обновление geo-баз (раз в 2 недели)
+    $shouldUpdateGeo = $false
+    try {
+        if ($settings.last_geo_update) {
+            $lastGeo = [DateTime]::Parse($settings.last_geo_update)
+            if (((Get-Date) - $lastGeo).Days -ge 14) { $shouldUpdateGeo = $true }
+        } else { $shouldUpdateGeo = $true }
+    } catch { $shouldUpdateGeo = $true }
+
+    if ($shouldUpdateGeo) {
         Write-Step 'Updating geo databases...'
         $geoOk = $true
         if (-not (Invoke-DownloadWithRetry $GEOIP_URL "$DOSTUP_DIR\geoip.dat")) { $geoOk = $false }
