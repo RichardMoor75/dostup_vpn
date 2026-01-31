@@ -153,7 +153,7 @@ ask_input() {
     # Если osascript не сработал - используем терминал
     if [[ -z "$result" ]]; then
         echo ""
-        read -p "$prompt " result
+        read -p "$prompt " result < /dev/tty
     fi
 
     echo "$result"
@@ -300,12 +300,12 @@ download_geo() {
     fi
 }
 
-# Создание скрипта запуска
-create_start_script() {
-    cat > "$DOSTUP_DIR/dostup-start.command" << 'STARTSCRIPT'
+# Создание скрипта управления (единый start/stop)
+create_control_script() {
+    cat > "$DOSTUP_DIR/Dostup_VPN.command" << 'CONTROLSCRIPT'
 #!/bin/bash
 
-# --- Dostup Start Script ---
+# --- Dostup VPN Control Script ---
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -321,21 +321,6 @@ CONFIG_FILE="$DOSTUP_DIR/config.yaml"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
 GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
-
-echo ""
-echo -e "${BLUE}=== Dostup Start ===${NC}"
-echo ""
-
-# Проверка: уже запущен?
-if pgrep -x "mihomo" > /dev/null; then
-    echo -e "${YELLOW}Mihomo уже запущен${NC}"
-    echo ""
-    echo "Панель управления: https://metacubex.github.io/metacubexd/"
-    echo "API: 127.0.0.1:9090"
-    echo ""
-    read -p "Нажмите Enter для закрытия..."
-    exit 0
-fi
 
 # Функции
 read_settings() {
@@ -379,179 +364,199 @@ download_with_retry() {
 
 validate_yaml() {
     local content=$(head -c 1000 "$1" 2>/dev/null)
-    # Не HTML и содержит YAML-структуру
     ! echo "$content" | grep -qiE '<!DOCTYPE|<html' && echo "$content" | grep -qE '^[a-zA-Z_-]+:|^\s*-\s+'
 }
 
-# Проверка обновлений ядра
-echo -e "${YELLOW}▶ Проверка обновлений ядра...${NC}"
-current_version=$(read_settings "installed_version")
-latest_version=$(get_latest_version)
-
-if [[ -n "$latest_version" && "$current_version" != "$latest_version" ]]; then
-    echo -e "${YELLOW}▶ Обновление ядра: $current_version → $latest_version${NC}"
-    arch=$(uname -m)
-    [[ "$arch" == "arm64" ]] && arch="arm64" || arch="amd64"
-    filename="mihomo-darwin-${arch}-${latest_version}.gz"
-    download_url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/${filename}"
-
-    if download_with_retry "$download_url" "$DOSTUP_DIR/mihomo.gz"; then
-        gunzip -f "$DOSTUP_DIR/mihomo.gz"
-        chmod +x "$MIHOMO_BIN"
-        xattr -d com.apple.quarantine "$MIHOMO_BIN" 2>/dev/null || true
-        update_settings "installed_version" "$latest_version"
-        echo -e "${GREEN}✓ Ядро обновлено${NC}"
+do_stop() {
+    echo -e "${YELLOW}▶ Остановка Mihomo (требуется пароль администратора)...${NC}"
+    echo ""
+    sudo pkill mihomo
+    sleep 2
+    if ! pgrep -x "mihomo" > /dev/null; then
+        echo -e "${GREEN}✓ Mihomo остановлен${NC}"
+        return 0
     else
-        echo -e "${RED}✗ Не удалось обновить ядро, используем текущую версию${NC}"
+        echo -e "${RED}✗ Не удалось остановить Mihomo${NC}"
+        echo "Попробуйте: sudo pkill -9 mihomo"
+        return 1
     fi
-else
-    echo -e "${GREEN}✓ Ядро актуально${NC}"
-fi
+}
 
-# Скачивание конфига
-echo -e "${YELLOW}▶ Скачивание конфига...${NC}"
-sub_url=$(read_settings "subscription_url")
-if [[ -n "$sub_url" ]]; then
-    # Бэкап старого конфига
-    [[ -f "$CONFIG_FILE" ]] && cp "$CONFIG_FILE" "${CONFIG_FILE}.backup"
+do_start() {
+    # Проверка обновлений ядра
+    echo -e "${YELLOW}▶ Проверка обновлений ядра...${NC}"
+    current_version=$(read_settings "installed_version")
+    latest_version=$(get_latest_version)
 
-    temp_config="${CONFIG_FILE}.tmp"
-    if download_with_retry "$sub_url" "$temp_config"; then
-        if validate_yaml "$temp_config"; then
-            mv "$temp_config" "$CONFIG_FILE"
-            echo -e "${GREEN}✓ Конфиг обновлён${NC}"
+    if [[ -n "$latest_version" && "$current_version" != "$latest_version" ]]; then
+        echo -e "${YELLOW}▶ Обновление ядра: $current_version → $latest_version${NC}"
+        arch=$(uname -m)
+        [[ "$arch" == "arm64" ]] && arch="arm64" || arch="amd64"
+        filename="mihomo-darwin-${arch}-${latest_version}.gz"
+        download_url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/${filename}"
+
+        if download_with_retry "$download_url" "$DOSTUP_DIR/mihomo.gz"; then
+            gunzip -f "$DOSTUP_DIR/mihomo.gz"
+            chmod +x "$MIHOMO_BIN"
+            xattr -d com.apple.quarantine "$MIHOMO_BIN" 2>/dev/null || true
+            update_settings "installed_version" "$latest_version"
+            echo -e "${GREEN}✓ Ядро обновлено${NC}"
         else
-            echo -e "${RED}✗ Конфиг невалидный YAML, используем старый${NC}"
-            rm -f "$temp_config"
+            echo -e "${RED}✗ Не удалось обновить ядро, используем текущую версию${NC}"
+        fi
+    else
+        echo -e "${GREEN}✓ Ядро актуально${NC}"
+    fi
+
+    # Скачивание конфига
+    echo -e "${YELLOW}▶ Скачивание конфига...${NC}"
+    sub_url=$(read_settings "subscription_url")
+    if [[ -n "$sub_url" ]]; then
+        [[ -f "$CONFIG_FILE" ]] && cp "$CONFIG_FILE" "${CONFIG_FILE}.backup"
+
+        temp_config="${CONFIG_FILE}.tmp"
+        if download_with_retry "$sub_url" "$temp_config"; then
+            if validate_yaml "$temp_config"; then
+                mv "$temp_config" "$CONFIG_FILE"
+                echo -e "${GREEN}✓ Конфиг обновлён${NC}"
+            else
+                echo -e "${RED}✗ Конфиг невалидный YAML, используем старый${NC}"
+                rm -f "$temp_config"
+                [[ -f "${CONFIG_FILE}.backup" ]] && mv "${CONFIG_FILE}.backup" "$CONFIG_FILE"
+            fi
+        else
+            echo -e "${RED}✗ Не удалось скачать конфиг, используем старый${NC}"
             [[ -f "${CONFIG_FILE}.backup" ]] && mv "${CONFIG_FILE}.backup" "$CONFIG_FILE"
         fi
     else
-        echo -e "${RED}✗ Не удалось скачать конфиг, используем старый${NC}"
-        [[ -f "${CONFIG_FILE}.backup" ]] && mv "${CONFIG_FILE}.backup" "$CONFIG_FILE"
+        echo -e "${RED}✗ URL подписки не задан${NC}"
     fi
-else
-    echo -e "${RED}✗ URL подписки не задан${NC}"
-fi
 
-# Обновление geo-баз (раз в 2 недели)
-last_geo=$(read_settings "last_geo_update")
-if [[ -n "$last_geo" ]]; then
-    last_ts=$(date -j -f "%Y-%m-%d" "$last_geo" "+%s" 2>/dev/null || echo 0)
-    now_ts=$(date "+%s")
-    diff_days=$(( (now_ts - last_ts) / 86400 ))
+    # Обновление geo-баз (раз в 2 недели)
+    last_geo=$(read_settings "last_geo_update")
+    if [[ -n "$last_geo" ]]; then
+        last_ts=$(date -j -f "%Y-%m-%d" "$last_geo" "+%s" 2>/dev/null || echo 0)
+        now_ts=$(date "+%s")
+        diff_days=$(( (now_ts - last_ts) / 86400 ))
 
-    if [[ $diff_days -ge 14 ]]; then
-        echo -e "${YELLOW}▶ Обновление geo-баз...${NC}"
-        curl -L -o "$DOSTUP_DIR/geoip.dat" "$GEOIP_URL" 2>/dev/null
-        curl -L -o "$DOSTUP_DIR/geosite.dat" "$GEOSITE_URL" 2>/dev/null
-        update_settings "last_geo_update" "$(date +%Y-%m-%d)"
-        echo -e "${GREEN}✓ Geo-базы обновлены${NC}"
+        if [[ $diff_days -ge 14 ]]; then
+            echo -e "${YELLOW}▶ Обновление geo-баз...${NC}"
+            curl -L -o "$DOSTUP_DIR/geoip.dat" "$GEOIP_URL" 2>/dev/null
+            curl -L -o "$DOSTUP_DIR/geosite.dat" "$GEOSITE_URL" 2>/dev/null
+            update_settings "last_geo_update" "$(date +%Y-%m-%d)"
+            echo -e "${GREEN}✓ Geo-базы обновлены${NC}"
+        fi
     fi
-fi
 
-# Запуск
-echo -e "${YELLOW}▶ Запуск Mihomo (требуется пароль администратора)...${NC}"
+    # Запуск
+    echo -e "${YELLOW}▶ Запуск Mihomo (требуется пароль администратора)...${NC}"
+    echo ""
+
+    if ! sudo -v; then
+        echo -e "${RED}✗ Не удалось получить права администратора${NC}"
+        return 1
+    fi
+
+    # Настройка Application Firewall
+    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
+    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
+
+    # Запускаем
+    sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' > '$DOSTUP_DIR/logs/mihomo.log' 2>&1 &"
+
+    sleep 2
+
+    if pgrep -x "mihomo" > /dev/null; then
+        echo ""
+        echo -e "${GREEN}============================================${NC}"
+        echo -e "${GREEN}✓ Mihomo успешно запущен!${NC}"
+        echo -e "${GREEN}============================================${NC}"
+        echo ""
+        echo "Панель управления: https://metacubex.github.io/metacubexd/"
+        echo "API: 127.0.0.1:9090"
+        return 0
+    else
+        echo -e "${RED}✗ Не удалось запустить Mihomo${NC}"
+        echo "Проверьте логи: $DOSTUP_DIR/logs/mihomo.log"
+        return 1
+    fi
+}
+
+# === MAIN ===
+
+echo ""
+echo -e "${BLUE}=== Dostup VPN ===${NC}"
 echo ""
 
-# Сначала получаем sudo-права (запрос пароля)
-if ! sudo -v; then
-    echo -e "${RED}✗ Не удалось получить права администратора${NC}"
-    read -p "Нажмите Enter для закрытия..."
-    exit 1
-fi
-
-# Запускаем полностью отвязанным от терминала
-sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' > '$DOSTUP_DIR/logs/mihomo.log' 2>&1 &"
-
-sleep 2
-
 if pgrep -x "mihomo" > /dev/null; then
-    echo ""
-    echo -e "${GREEN}============================================${NC}"
-    echo -e "${GREEN}✓ Mihomo успешно запущен!${NC}"
-    echo -e "${GREEN}============================================${NC}"
+    # Mihomo запущен — показываем меню
+    echo -e "${GREEN}Mihomo работает${NC}"
     echo ""
     echo "Панель управления: https://metacubex.github.io/metacubexd/"
     echo "API: 127.0.0.1:9090"
     echo ""
+    echo "1) Остановить"
+    echo "2) Перезапустить"
+    echo "3) Отмена"
+    echo ""
+    read -p "Выберите (1-3): " choice < /dev/tty
+
+    case "$choice" in
+        1)
+            do_stop
+            echo ""
+            echo "Окно закроется через 3 секунды..."
+            sleep 3
+            osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || exit 0
+            ;;
+        2)
+            do_stop
+            echo ""
+            do_start
+            echo ""
+            echo "Окно закроется через 5 секунд..."
+            sleep 5
+            osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || exit 0
+            ;;
+        *)
+            echo ""
+            echo "Отменено"
+            echo ""
+            echo "Окно закроется через 2 секунды..."
+            sleep 2
+            osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || exit 0
+            ;;
+    esac
+else
+    # Mihomo не запущен — запускаем без вопросов
+    do_start
+    echo ""
     echo "Окно закроется через 5 секунд..."
     sleep 5
-    osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || read -p "Нажмите Enter для закрытия..."
-    exit 0
-else
-    echo -e "${RED}✗ Не удалось запустить Mihomo${NC}"
-    echo "Проверьте логи: $DOSTUP_DIR/logs/mihomo.log"
-    echo ""
-    read -p "Нажмите Enter для закрытия..."
+    osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || exit 0
 fi
-STARTSCRIPT
+CONTROLSCRIPT
 
-    chmod +x "$DOSTUP_DIR/dostup-start.command"
+    chmod +x "$DOSTUP_DIR/Dostup_VPN.command"
+
+    # Удаляем старые скрипты если есть
+    rm -f "$DOSTUP_DIR/dostup-start.command" 2>/dev/null
+    rm -f "$DOSTUP_DIR/dostup-stop.command" 2>/dev/null
 }
 
-# Создание скрипта остановки
-create_stop_script() {
-    cat > "$DOSTUP_DIR/dostup-stop.command" << 'STOPSCRIPT'
-#!/bin/bash
-
-# --- Dostup Stop Script ---
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-echo ""
-echo -e "${BLUE}=== Dostup Stop ===${NC}"
-echo ""
-
-if ! pgrep -x "mihomo" > /dev/null; then
-    echo -e "${YELLOW}Mihomo не запущен${NC}"
-    echo ""
-    echo "Окно закроется через 2 секунды..."
-    sleep 2
-    osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || read -p "Нажмите Enter для закрытия..."
-    exit 0
-fi
-
-echo -e "${YELLOW}▶ Остановка Mihomo (требуется пароль администратора)...${NC}"
-echo ""
-
-sudo pkill mihomo
-
-sleep 2
-
-if ! pgrep -x "mihomo" > /dev/null; then
-    echo ""
-    echo -e "${GREEN}✓ Mihomo остановлен${NC}"
-    echo ""
-    echo "Окно закроется через 3 секунды..."
-    sleep 3
-    osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || read -p "Нажмите Enter для закрытия..."
-    exit 0
-else
-    echo -e "${RED}✗ Не удалось остановить Mihomo${NC}"
-    echo "Попробуйте: sudo pkill -9 mihomo"
-    echo ""
-    read -p "Нажмите Enter для закрытия..."
-fi
-STOPSCRIPT
-
-    chmod +x "$DOSTUP_DIR/dostup-stop.command"
-}
-
-# Создание ярлыков на рабочем столе
+# Создание ярлыка на рабочем столе
 create_desktop_shortcuts() {
-    print_step "Создание ярлыков на рабочем столе..."
+    print_step "Создание ярлыка на рабочем столе..."
 
-    cp "$DOSTUP_DIR/dostup-start.command" "$DESKTOP_DIR/Dostup Start.command"
-    cp "$DOSTUP_DIR/dostup-stop.command" "$DESKTOP_DIR/Dostup Stop.command"
+    # Удаляем старые ярлыки если есть
+    rm -f "$DESKTOP_DIR/Dostup Start.command" 2>/dev/null
+    rm -f "$DESKTOP_DIR/Dostup Stop.command" 2>/dev/null
 
-    chmod +x "$DESKTOP_DIR/Dostup Start.command"
-    chmod +x "$DESKTOP_DIR/Dostup Stop.command"
+    # Создаём новый единый ярлык
+    cp "$DOSTUP_DIR/Dostup_VPN.command" "$DESKTOP_DIR/Dostup_VPN.command"
+    chmod +x "$DESKTOP_DIR/Dostup_VPN.command"
 
-    print_success "Ярлыки созданы на рабочем столе"
+    print_success "Ярлык создан на рабочем столе"
 }
 
 # Запуск mihomo
@@ -564,6 +569,10 @@ start_mihomo() {
         print_error "Не удалось получить права администратора"
         return 1
     fi
+
+    # Настройка Application Firewall (разрешаем mihomo)
+    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
+    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
 
     # Запускаем полностью отвязанным от терминала
     sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' > '$LOGS_DIR/mihomo.log' 2>&1 &"
@@ -588,9 +597,8 @@ https://metacubex.github.io/metacubexd/
 
 API: 127.0.0.1:9090
 
-На рабочем столе созданы ярлыки:
-• Dostup Start — для запуска
-• Dostup Stop — для остановки" buttons {"OK"} default button 1 with title "Dostup"
+На рабочем столе создан ярлык:
+• Dostup_VPN — запуск/остановка/перезапуск" buttons {"OK"} default button 1 with title "Dostup"
 EOF
 }
 
@@ -603,24 +611,31 @@ print_header
 # Проверки
 check_macos
 
-# Сохраняем старую подписку если есть
+# Сохраняем старую подписку если есть (файл может быть с правами root)
 OLD_SUB_URL=""
 if [[ -f "$SETTINGS_FILE" ]]; then
-    OLD_SUB_URL=$(python3 -c "import json; print(json.load(open('$SETTINGS_FILE')).get('subscription_url', ''))" 2>/dev/null || true)
+    OLD_SUB_URL=$(sudo cat "$SETTINGS_FILE" 2>/dev/null | python3 -c "import sys, json; print(json.load(sys.stdin).get('subscription_url', ''))" 2>/dev/null || true)
 fi
 
 # Остановка mihomo если запущен
 if pgrep -x "mihomo" > /dev/null; then
     print_step "Остановка запущенного Mihomo..."
-    sudo pkill mihomo 2>/dev/null || true
-    sleep 2
+    sudo pkill -9 mihomo 2>/dev/null || true
+    sleep 3
+    # Проверка что остановился
+    if pgrep -x "mihomo" > /dev/null; then
+        print_error "Не удалось остановить Mihomo"
+        echo "Закройте все программы использующие dostup и попробуйте снова"
+        read -p "Нажмите Enter для закрытия..."
+        exit 1
+    fi
     print_success "Mihomo остановлен"
 fi
 
 # Удаление старой установки
 if [[ -d "$DOSTUP_DIR" ]]; then
     print_step "Удаление старой установки..."
-    rm -rf "$DOSTUP_DIR"
+    sudo rm -rf "$DOSTUP_DIR"
     print_success "Старая установка удалена"
 fi
 
@@ -654,7 +669,7 @@ if [[ -n "$OLD_SUB_URL" ]]; then
     echo "1) Оставить текущую подписку"
     echo "2) Ввести новую подписку"
     echo ""
-    read -p "Выберите (1 или 2): " choice
+    read -p "Выберите (1 или 2): " choice < /dev/tty
 
     if [[ "$choice" == "2" ]]; then
         SUB_URL=$(ask_input "Введите URL подписки (конфига):" "")
@@ -692,11 +707,10 @@ fi
 # Скачивание geo-баз
 download_geo
 
-# Создание скриптов
-print_step "Создание скриптов..."
-create_start_script
-create_stop_script
-print_success "Скрипты созданы"
+# Создание скрипта управления
+print_step "Создание скрипта управления..."
+create_control_script
+print_success "Скрипт создан"
 
 # Ярлыки на рабочем столе
 create_desktop_shortcuts
@@ -712,9 +726,8 @@ if start_mihomo; then
     echo "Панель управления: https://metacubex.github.io/metacubexd/"
     echo "API: 127.0.0.1:9090"
     echo ""
-    echo "Ярлыки на рабочем столе:"
-    echo "  • Dostup Start — для запуска"
-    echo "  • Dostup Stop — для остановки"
+    echo "Ярлык на рабочем столе:"
+    echo "  • Dostup_VPN — запуск/остановка/перезапуск"
     echo ""
 
     show_success_message

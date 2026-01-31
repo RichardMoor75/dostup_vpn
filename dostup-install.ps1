@@ -108,15 +108,29 @@ if (Test-Path $SETTINGS_FILE) {
 $mihomoProcess = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
 if ($mihomoProcess) {
     Write-Step 'Stopping running Mihomo...'
-    Stop-Process -Name 'mihomo' -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    # Use taskkill with admin rights (same as stop script)
+    Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    Start-Sleep -Seconds 3
     Write-OK 'Mihomo stopped'
 }
 
 # Remove old installation
 if (Test-Path $DOSTUP_DIR) {
     Write-Step 'Removing old installation...'
-    Remove-Item -Recurse -Force $DOSTUP_DIR
+    # Retry removal in case files are still locked
+    $retries = 3
+    while ((Test-Path $DOSTUP_DIR) -and $retries -gt 0) {
+        Remove-Item -Recurse -Force $DOSTUP_DIR -ErrorAction SilentlyContinue
+        if (Test-Path $DOSTUP_DIR) {
+            Start-Sleep -Seconds 2
+            $retries--
+        }
+    }
+    if (Test-Path $DOSTUP_DIR) {
+        Write-Fail 'Could not remove old installation. Please close all programs using dostup folder and try again.'
+        Read-Host 'Press Enter to close'
+        exit 1
+    }
     Write-OK 'Old installation removed'
 }
 
@@ -275,9 +289,9 @@ $settings = @{
 }
 $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
 
-Write-Step 'Creating scripts...'
+Write-Step 'Creating control script...'
 
-$startPs1 = @'
+$controlPs1 = @'
 $DOSTUP_DIR = "$env:USERPROFILE\dostup"
 $SETTINGS_FILE = "$DOSTUP_DIR\settings.json"
 $MIHOMO_BIN = "$DOSTUP_DIR\mihomo.exe"
@@ -321,148 +335,174 @@ function Expand-ZipFile($zipPath, $destPath) {
     }
 }
 
-Write-Host ''
-Write-Host '=== Dostup Start ===' -ForegroundColor Blue
-Write-Host ''
-
-$proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-if ($proc) {
-    Write-Host 'Mihomo is already running' -ForegroundColor Yellow
-    Write-Host ''
-    Write-Host 'Panel: https://metacubex.github.io/metacubexd/'
-    Write-Host 'API: 127.0.0.1:9090'
-    Write-Host ''
-    Read-Host 'Press Enter'
-    exit
+function Stop-Mihomo {
+    Write-Step 'Stopping Mihomo (requires admin)...'
+    Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    Start-Sleep -Seconds 2
+    $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
+    if (-not $proc) {
+        Write-OK 'Mihomo stopped'
+        return $true
+    } else {
+        Write-Fail 'Could not stop'
+        return $false
+    }
 }
 
-$settings = Get-Content $SETTINGS_FILE | ConvertFrom-Json
+function Start-Mihomo {
+    $settings = Get-Content $SETTINGS_FILE | ConvertFrom-Json
 
-Write-Step 'Checking for core updates...'
-try {
-    $rel = Invoke-RestMethod -Uri $MIHOMO_API -UseBasicParsing
-    $latest = $rel.tag_name
-    if ($settings.installed_version -ne $latest) {
-        Write-Step "Updating: $($settings.installed_version) -> $latest"
-        $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
-        if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $arch = 'arm64' }
-        $fn = "mihomo-windows-$arch-$latest.zip"
-        $url = "https://github.com/MetaCubeX/mihomo/releases/download/$latest/$fn"
-        if (Invoke-DownloadWithRetry $url "$DOSTUP_DIR\m.zip") {
-            Expand-ZipFile "$DOSTUP_DIR\m.zip" $DOSTUP_DIR
-            Remove-Item "$DOSTUP_DIR\m.zip" -Force
-            $exe = Get-ChildItem -Path $DOSTUP_DIR -Filter 'mihomo*.exe' | Select-Object -First 1
-            if ($exe -and $exe.Name -ne 'mihomo.exe') {
-                Remove-Item $MIHOMO_BIN -Force -ErrorAction SilentlyContinue
-                Rename-Item -Path $exe.FullName -NewName 'mihomo.exe' -Force
-            }
-            $settings.installed_version = $latest
-            $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
-            Write-OK 'Core updated'
-        } else { Write-Fail 'Update failed, using current version' }
-    } else { Write-OK 'Core is up to date' }
-} catch { Write-OK 'Core is up to date' }
+    Write-Step 'Checking for core updates...'
+    try {
+        $rel = Invoke-RestMethod -Uri $MIHOMO_API -UseBasicParsing
+        $latest = $rel.tag_name
+        if ($settings.installed_version -ne $latest) {
+            Write-Step "Updating: $($settings.installed_version) -> $latest"
+            $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
+            if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $arch = 'arm64' }
+            $fn = "mihomo-windows-$arch-$latest.zip"
+            $url = "https://github.com/MetaCubeX/mihomo/releases/download/$latest/$fn"
+            if (Invoke-DownloadWithRetry $url "$DOSTUP_DIR\m.zip") {
+                Expand-ZipFile "$DOSTUP_DIR\m.zip" $DOSTUP_DIR
+                Remove-Item "$DOSTUP_DIR\m.zip" -Force
+                $exe = Get-ChildItem -Path $DOSTUP_DIR -Filter 'mihomo*.exe' | Select-Object -First 1
+                if ($exe -and $exe.Name -ne 'mihomo.exe') {
+                    Remove-Item $MIHOMO_BIN -Force -ErrorAction SilentlyContinue
+                    Rename-Item -Path $exe.FullName -NewName 'mihomo.exe' -Force
+                }
+                $settings.installed_version = $latest
+                $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
+                Write-OK 'Core updated'
+            } else { Write-Fail 'Update failed, using current version' }
+        } else { Write-OK 'Core is up to date' }
+    } catch { Write-OK 'Core is up to date' }
 
-Write-Step 'Downloading config...'
-if (Test-Path $CONFIG_FILE) { Copy-Item $CONFIG_FILE "$CONFIG_FILE.backup" -Force }
-$tempCfg = "$CONFIG_FILE.tmp"
-if (Invoke-DownloadWithRetry $settings.subscription_url $tempCfg) {
-    if (Test-ValidYaml $tempCfg) {
-        Move-Item $tempCfg $CONFIG_FILE -Force
-        Write-OK 'Config updated'
+    Write-Step 'Downloading config...'
+    if (Test-Path $CONFIG_FILE) { Copy-Item $CONFIG_FILE "$CONFIG_FILE.backup" -Force }
+    $tempCfg = "$CONFIG_FILE.tmp"
+    if (Invoke-DownloadWithRetry $settings.subscription_url $tempCfg) {
+        if (Test-ValidYaml $tempCfg) {
+            Move-Item $tempCfg $CONFIG_FILE -Force
+            Write-OK 'Config updated'
+        } else {
+            Write-Fail 'Invalid YAML, using old config'
+            Remove-Item $tempCfg -Force -ErrorAction SilentlyContinue
+            if (Test-Path "$CONFIG_FILE.backup") { Move-Item "$CONFIG_FILE.backup" $CONFIG_FILE -Force }
+        }
     } else {
-        Write-Fail 'Invalid YAML, using old config'
-        Remove-Item $tempCfg -Force -ErrorAction SilentlyContinue
+        Write-Fail 'Using old config'
         if (Test-Path "$CONFIG_FILE.backup") { Move-Item "$CONFIG_FILE.backup" $CONFIG_FILE -Force }
     }
-} else {
-    Write-Fail 'Using old config'
-    if (Test-Path "$CONFIG_FILE.backup") { Move-Item "$CONFIG_FILE.backup" $CONFIG_FILE -Force }
-}
 
-$lastGeo = [DateTime]::Parse($settings.last_geo_update)
-if (((Get-Date) - $lastGeo).Days -ge 14) {
-    Write-Step 'Updating geo databases...'
-    $geoOk = $true
-    if (-not (Invoke-DownloadWithRetry $GEOIP_URL "$DOSTUP_DIR\geoip.dat")) { $geoOk = $false }
-    if (-not (Invoke-DownloadWithRetry $GEOSITE_URL "$DOSTUP_DIR\geosite.dat")) { $geoOk = $false }
-    if ($geoOk) {
-        $settings.last_geo_update = (Get-Date -Format 'yyyy-MM-dd')
-        $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
-        Write-OK 'Geo databases updated'
+    $lastGeo = [DateTime]::Parse($settings.last_geo_update)
+    if (((Get-Date) - $lastGeo).Days -ge 14) {
+        Write-Step 'Updating geo databases...'
+        $geoOk = $true
+        if (-not (Invoke-DownloadWithRetry $GEOIP_URL "$DOSTUP_DIR\geoip.dat")) { $geoOk = $false }
+        if (-not (Invoke-DownloadWithRetry $GEOSITE_URL "$DOSTUP_DIR\geosite.dat")) { $geoOk = $false }
+        if ($geoOk) {
+            $settings.last_geo_update = (Get-Date -Format 'yyyy-MM-dd')
+            $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
+            Write-OK 'Geo databases updated'
+        }
+    }
+
+    Write-Step 'Starting Mihomo...'
+    Write-Host ''
+    Start-Process -FilePath $MIHOMO_BIN -ArgumentList "-d `"$DOSTUP_DIR`"" -Verb RunAs -WindowStyle Hidden
+    Start-Sleep -Seconds 3
+
+    $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
+    if ($proc) {
+        Write-Host ''
+        Write-Host '============================================' -ForegroundColor Green
+        Write-Host '[OK] Mihomo started successfully!' -ForegroundColor Green
+        Write-Host '============================================' -ForegroundColor Green
+        Write-Host ''
+        Write-Host 'Panel: https://metacubex.github.io/metacubexd/'
+        Write-Host 'API: 127.0.0.1:9090'
+        return $true
+    } else {
+        Write-Fail 'Failed to start'
+        Write-Host "Logs: $DOSTUP_DIR\logs"
+        return $false
     }
 }
 
-Write-Step 'Starting Mihomo...'
+# === MAIN ===
+
 Write-Host ''
-Start-Process -FilePath $MIHOMO_BIN -ArgumentList "-d `"$DOSTUP_DIR`"" -Verb RunAs -WindowStyle Hidden
-Start-Sleep -Seconds 3
+Write-Host '=== Dostup VPN ===' -ForegroundColor Blue
+Write-Host ''
 
 $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
 if ($proc) {
-    Write-Host ''
-    Write-Host '============================================' -ForegroundColor Green
-    Write-Host '[OK] Mihomo started successfully!' -ForegroundColor Green
-    Write-Host '============================================' -ForegroundColor Green
+    # Mihomo is running - show menu
+    Write-Host 'Mihomo is running' -ForegroundColor Green
     Write-Host ''
     Write-Host 'Panel: https://metacubex.github.io/metacubexd/'
     Write-Host 'API: 127.0.0.1:9090'
+    Write-Host ''
+    Write-Host '1) Stop'
+    Write-Host '2) Restart'
+    Write-Host '3) Cancel'
+    Write-Host ''
+    $choice = Read-Host 'Choose (1-3)'
+
+    switch ($choice) {
+        '1' {
+            Stop-Mihomo
+            Write-Host ''
+            Write-Host 'Window will close in 3 seconds...'
+            Start-Sleep -Seconds 3
+        }
+        '2' {
+            Stop-Mihomo
+            Write-Host ''
+            Start-Mihomo
+            Write-Host ''
+            Write-Host 'Window will close in 5 seconds...'
+            Start-Sleep -Seconds 5
+        }
+        default {
+            Write-Host ''
+            Write-Host 'Cancelled'
+            Write-Host ''
+            Write-Host 'Window will close in 2 seconds...'
+            Start-Sleep -Seconds 2
+        }
+    }
+} else {
+    # Mihomo is not running - start without asking
+    Start-Mihomo
     Write-Host ''
     Write-Host 'Window will close in 5 seconds...'
     Start-Sleep -Seconds 5
-} else {
-    Write-Fail 'Failed to start'
-    Write-Host "Logs: $DOSTUP_DIR\logs"
-    Read-Host 'Press Enter'
 }
 '@
-$startPs1 | Set-Content -Path "$DOSTUP_DIR\dostup-start.ps1" -Encoding UTF8
+$controlPs1 | Set-Content -Path "$DOSTUP_DIR\Dostup_VPN.ps1" -Encoding UTF8
 
-$stopPs1 = @'
-Write-Host ''
-Write-Host '=== Dostup Stop ===' -ForegroundColor Blue
-Write-Host ''
-$proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-if (-not $proc) {
-    Write-Host 'Mihomo is not running' -ForegroundColor Yellow
-    Start-Sleep -Seconds 2
-    exit
-}
-Write-Host '> Stopping Mihomo (requires admin)...' -ForegroundColor Yellow
-Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
-Start-Sleep -Seconds 2
-$proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-if (-not $proc) {
-    Write-Host ''
-    Write-Host '[OK] Mihomo stopped' -ForegroundColor Green
-    Write-Host 'Window will close in 3 seconds...'
-    Start-Sleep -Seconds 3
-} else {
-    Write-Host '[FAIL] Could not stop' -ForegroundColor Red
-    Write-Host 'Try running as Administrator'
-    Read-Host 'Press Enter'
-}
-'@
-$stopPs1 | Set-Content -Path "$DOSTUP_DIR\dostup-stop.ps1" -Encoding UTF8
+# Remove old scripts if exist
+Remove-Item "$DOSTUP_DIR\dostup-start.ps1" -Force -ErrorAction SilentlyContinue
+Remove-Item "$DOSTUP_DIR\dostup-stop.ps1" -Force -ErrorAction SilentlyContinue
 
-Write-OK 'Scripts created'
+Write-OK 'Control script created'
 
-Write-Step 'Creating desktop shortcuts...'
+Write-Step 'Creating desktop shortcut...'
 $WshShell = New-Object -ComObject WScript.Shell
 
-$startLnk = $WshShell.CreateShortcut("$DESKTOP\Dostup Start.lnk")
-$startLnk.TargetPath = "powershell.exe"
-$startLnk.Arguments = "-ExecutionPolicy Bypass -File `"$DOSTUP_DIR\dostup-start.ps1`""
-$startLnk.WorkingDirectory = $DOSTUP_DIR
-$startLnk.Save()
+# Remove old shortcuts if exist
+Remove-Item "$DESKTOP\Dostup Start.lnk" -Force -ErrorAction SilentlyContinue
+Remove-Item "$DESKTOP\Dostup Stop.lnk" -Force -ErrorAction SilentlyContinue
 
-$stopLnk = $WshShell.CreateShortcut("$DESKTOP\Dostup Stop.lnk")
-$stopLnk.TargetPath = "powershell.exe"
-$stopLnk.Arguments = "-ExecutionPolicy Bypass -File `"$DOSTUP_DIR\dostup-stop.ps1`""
-$stopLnk.WorkingDirectory = $DOSTUP_DIR
-$stopLnk.Save()
+# Create new shortcut
+$vpnLnk = $WshShell.CreateShortcut("$DESKTOP\Dostup_VPN.lnk")
+$vpnLnk.TargetPath = "powershell.exe"
+$vpnLnk.Arguments = "-ExecutionPolicy Bypass -File `"$DOSTUP_DIR\Dostup_VPN.ps1`""
+$vpnLnk.WorkingDirectory = $DOSTUP_DIR
+$vpnLnk.Save()
 
-Write-OK 'Shortcuts created'
+Write-OK 'Shortcut created'
 
 Write-Step 'Configuring firewall...'
 try {
@@ -471,12 +511,12 @@ try {
 
     if ($isWin8Plus) {
         # PowerShell cmdlets for Windows 8+
-        Get-NetFirewallRule -DisplayName "*mihomo*" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Action -eq 'Block' } |
-            Remove-NetFirewallRule -ErrorAction SilentlyContinue
-
-        Get-NetFirewallRule -DisplayName "Mihomo Proxy*" -ErrorAction SilentlyContinue |
-            Remove-NetFirewallRule -ErrorAction SilentlyContinue
+        # Remove ALL existing rules for mihomo.exe (by program path, not display name)
+        Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object {
+            try {
+                ($_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program -like "*mihomo.exe"
+            } catch { $false }
+        } | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 
         New-NetFirewallRule -DisplayName "Mihomo Proxy (Inbound)" `
             -Direction Inbound `
@@ -492,9 +532,8 @@ try {
             -Profile Any `
             -ErrorAction SilentlyContinue | Out-Null
     } else {
-        # netsh for Windows 7
-        $null = netsh advfirewall firewall delete rule name="Mihomo Proxy (Inbound)" 2>$null
-        $null = netsh advfirewall firewall delete rule name="Mihomo Proxy (Outbound)" 2>$null
+        # netsh for Windows 7 - delete all rules for mihomo.exe by program
+        $null = netsh advfirewall firewall delete rule name=all program="$MIHOMO_BIN" 2>$null
 
         $null = netsh advfirewall firewall add rule name="Mihomo Proxy (Inbound)" `
             dir=in action=allow program="$MIHOMO_BIN" enable=yes profile=any 2>$null
@@ -522,9 +561,8 @@ if ($process) {
     Write-Host 'Panel: https://metacubex.github.io/metacubexd/'
     Write-Host 'API: 127.0.0.1:9090'
     Write-Host ''
-    Write-Host 'Desktop shortcuts:'
-    Write-Host '  - Dostup Start'
-    Write-Host '  - Dostup Stop'
+    Write-Host 'Desktop shortcut:'
+    Write-Host '  - Dostup_VPN'
     Write-Host ''
 } else {
     Write-Host '[FAIL] Failed to start Mihomo' -ForegroundColor Red
