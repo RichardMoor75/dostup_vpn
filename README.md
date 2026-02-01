@@ -93,7 +93,8 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
     "youtube.com",
     "facebook.com",
     "rutracker.org",
-    "hdrezka.ag"
+    "hdrezka.ag",
+    "flibusta.is"
   ]
 }
 ```

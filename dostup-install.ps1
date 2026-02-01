@@ -314,7 +314,8 @@ if (-not (Test-Path $sitesFile)) {
             "youtube.com",
             "facebook.com",
             "rutracker.org",
-            "hdrezka.ag"
+            "hdrezka.ag",
+            "flibusta.is"
         )
     }
     $sitesContent | ConvertTo-Json | Set-Content -Path $sitesFile -Encoding UTF8

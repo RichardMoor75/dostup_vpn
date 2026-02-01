@@ -304,7 +304,8 @@ create_sites_json() {
     "youtube.com",
     "facebook.com",
     "rutracker.org",
-    "hdrezka.ag"
+    "hdrezka.ag",
+    "flibusta.is"
   ]
 }
 EOF
