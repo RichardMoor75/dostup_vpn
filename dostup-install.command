@@ -293,6 +293,24 @@ download_config() {
     return 0
 }
 
+# Создание файла sites.json для проверки доступа
+create_sites_json() {
+    local sites_file="$DOSTUP_DIR/sites.json"
+    if [[ ! -f "$sites_file" ]]; then
+        cat > "$sites_file" << 'EOF'
+{
+  "sites": [
+    "instagram.com",
+    "youtube.com",
+    "facebook.com",
+    "rutracker.org",
+    "hdrezka.ag"
+  ]
+}
+EOF
+    fi
+}
+
 # Скачивание geo-баз
 download_geo() {
     print_step "Скачивание geo-баз..."
@@ -336,6 +354,7 @@ CONFIG_FILE="$DOSTUP_DIR/config.yaml"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
 GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+SITES_FILE="$DOSTUP_DIR/sites.json"
 
 # Функции
 read_settings() {
@@ -383,6 +402,37 @@ download_with_retry() {
 validate_yaml() {
     local content=$(head -c 1000 "$1" 2>/dev/null)
     ! echo "$content" | grep -qiE '<!DOCTYPE|<html' && echo "$content" | grep -qE '^[a-zA-Z_-]+:|^\s*-\s+'
+}
+
+do_check_access() {
+    echo ""
+    echo -e "${YELLOW}▶ Проверка доступа к ресурсам...${NC}"
+    echo ""
+
+    if [[ ! -f "$SITES_FILE" ]]; then
+        echo -e "${RED}✗ Файл sites.json не найден${NC}"
+        return 1
+    fi
+
+    # Читаем сайты из JSON
+    local sites
+    sites=$(python3 -c "import json; print('\n'.join(json.load(open('$SITES_FILE'))['sites']))" 2>/dev/null)
+
+    if [[ -z "$sites" ]]; then
+        echo -e "${RED}✗ Не удалось прочитать список сайтов${NC}"
+        return 1
+    fi
+
+    while IFS= read -r site; do
+        # Проверяем доступность через curl с таймаутом 5 сек
+        if curl -s --head --connect-timeout 5 --max-time 10 "https://$site" > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ $site — доступен${NC}"
+        else
+            echo -e "${RED}✗ $site — недоступен${NC}"
+        fi
+    done <<< "$sites"
+
+    echo ""
 }
 
 do_stop() {
@@ -533,9 +583,10 @@ if pgrep -x "mihomo" > /dev/null; then
     echo ""
     echo "1) Остановить"
     echo "2) Перезапустить"
-    echo "3) Отмена"
+    echo "3) Проверить доступ"
+    echo "4) Отмена"
     echo ""
-    read -p "Выберите (1-3): " choice < /dev/tty
+    read -p "Выберите (1-4): " choice < /dev/tty
 
     case "$choice" in
         1)
@@ -554,6 +605,13 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Окно закроется через 5 секунд..."
             sleep 5
+            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+            disown
+            exit 0
+            ;;
+        3)
+            do_check_access
+            read -p "Нажмите Enter для закрытия..." < /dev/tty
             (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
             disown
             exit 0
@@ -790,6 +848,9 @@ fi
 
 # Скачивание geo-баз
 download_geo
+
+# Создание sites.json
+create_sites_json
 
 # Скачивание иконки
 download_icon

@@ -305,6 +305,21 @@ if ($geoSuccess) {
 }
 $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
 
+# Create sites.json for access checking
+$sitesFile = "$DOSTUP_DIR\sites.json"
+if (-not (Test-Path $sitesFile)) {
+    $sitesContent = @{
+        sites = @(
+            "instagram.com",
+            "youtube.com",
+            "facebook.com",
+            "rutracker.org",
+            "hdrezka.ag"
+        )
+    }
+    $sitesContent | ConvertTo-Json | Set-Content -Path $sitesFile -Encoding UTF8
+}
+
 Write-Step 'Creating control script...'
 
 $controlPs1 = @'
@@ -312,6 +327,7 @@ $DOSTUP_DIR = "$env:USERPROFILE\dostup"
 $SETTINGS_FILE = "$DOSTUP_DIR\settings.json"
 $MIHOMO_BIN = "$DOSTUP_DIR\mihomo.exe"
 $CONFIG_FILE = "$DOSTUP_DIR\config.yaml"
+$SITES_FILE = "$DOSTUP_DIR\sites.json"
 $MIHOMO_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest'
 $GEOIP_URL = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat'
 $GEOSITE_URL = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat'
@@ -350,6 +366,36 @@ function Expand-ZipFile($zipPath, $destPath) {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destPath)
     }
+}
+
+function Test-SiteAccess {
+    Write-Host ''
+    Write-Step 'Проверка доступа к ресурсам...'
+    Write-Host ''
+
+    if (-not (Test-Path $SITES_FILE)) {
+        Write-Fail 'Файл sites.json не найден'
+        return
+    }
+
+    try {
+        $sitesData = Get-Content $SITES_FILE -Raw | ConvertFrom-Json
+        $sites = $sitesData.sites
+    } catch {
+        Write-Fail 'Не удалось прочитать список сайтов'
+        return
+    }
+
+    foreach ($site in $sites) {
+        try {
+            $null = Invoke-WebRequest -Uri "https://$site" -Method Head -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+            Write-Host "[OK] $site — доступен" -ForegroundColor Green
+        } catch {
+            Write-Host "[X] $site — недоступен" -ForegroundColor Red
+        }
+    }
+
+    Write-Host ''
 }
 
 function Stop-Mihomo {
@@ -475,9 +521,10 @@ if ($proc) {
     Write-Host ''
     Write-Host '1) Stop'
     Write-Host '2) Restart'
-    Write-Host '3) Cancel'
+    Write-Host '3) Check access'
+    Write-Host '4) Cancel'
     Write-Host ''
-    $choice = Read-Host 'Choose (1-3)'
+    $choice = Read-Host 'Choose (1-4)'
 
     switch ($choice) {
         '1' {
@@ -493,6 +540,10 @@ if ($proc) {
             Write-Host ''
             Write-Host 'Window will close in 5 seconds...'
             Start-Sleep -Seconds 5
+        }
+        '3' {
+            Test-SiteAccess
+            Read-Host 'Press Enter to close'
         }
         default {
             Write-Host ''

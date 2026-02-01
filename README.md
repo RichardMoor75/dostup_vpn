@@ -37,6 +37,7 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 
 - Остановки VPN
 - Перезапуска VPN (с обновлением конфига и ядра)
+- Проверки доступа к заблокированным ресурсам
 
 При каждом запуске автоматически проверяются обновления:
 - Ядро Mihomo (при наличии новой версии)
@@ -74,11 +75,30 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 ├── geoip.dat                # База IP-адресов
 ├── geosite.dat              # База доменов
 ├── settings.json            # Настройки (URL подписки, версия)
+├── sites.json               # Список сайтов для проверки доступа
 ├── Dostup_VPN.command       # Скрипт управления (macOS)
 ├── Dostup_VPN.ps1           # Скрипт управления (Windows)
 └── logs/
     └── mihomo.log           # Логи
 ```
+
+## Проверка доступа
+
+Функция "Проверить доступ" проверяет работоспособность VPN, пытаясь подключиться к заблокированным ресурсам. Список сайтов хранится в `sites.json`:
+
+```json
+{
+  "sites": [
+    "instagram.com",
+    "youtube.com",
+    "facebook.com",
+    "rutracker.org",
+    "hdrezka.ag"
+  ]
+}
+```
+
+Можно добавить свои сайты, отредактировав этот файл.
 
 ## Удаление
 
