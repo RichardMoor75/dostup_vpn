@@ -677,24 +677,60 @@ apply_icon() {
     " 2>/dev/null
 }
 
-# Создание ярлыка на рабочем столе
+# Создание .app bundle на рабочем столе
 create_desktop_shortcuts() {
-    print_step "Создание ярлыка на рабочем столе..."
+    print_step "Создание приложения на рабочем столе..."
+
+    local app_path="$DESKTOP_DIR/Dostup_VPN.app"
 
     # Удаляем старые ярлыки если есть
     rm -f "$DESKTOP_DIR/Dostup Start.command" 2>/dev/null
     rm -f "$DESKTOP_DIR/Dostup Stop.command" 2>/dev/null
+    rm -f "$DESKTOP_DIR/Dostup_VPN.command" 2>/dev/null
+    rm -rf "$DESKTOP_DIR/Dostup_VPN.app" 2>/dev/null
 
-    # Создаём новый единый ярлык
-    cp "$DOSTUP_DIR/Dostup_VPN.command" "$DESKTOP_DIR/Dostup_VPN.command"
-    chmod +x "$DESKTOP_DIR/Dostup_VPN.command"
+    # Создаём структуру .app bundle
+    mkdir -p "$app_path/Contents/MacOS"
+    mkdir -p "$app_path/Contents/Resources"
 
-    # Применяем иконку
-    if apply_icon "$DESKTOP_DIR/Dostup_VPN.command"; then
-        apply_icon "$DOSTUP_DIR/Dostup_VPN.command"
+    # Копируем иконку
+    if [[ -f "$DOSTUP_DIR/icon.icns" ]]; then
+        cp "$DOSTUP_DIR/icon.icns" "$app_path/Contents/Resources/AppIcon.icns"
     fi
 
-    print_success "Ярлык создан на рабочем столе"
+    # Создаём Info.plist
+    cat > "$app_path/Contents/Info.plist" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>Dostup_VPN</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>ru.richard-moor.dostup-vpn</string>
+    <key>CFBundleName</key>
+    <string>Dostup VPN</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13</string>
+</dict>
+</plist>
+PLIST
+
+    # Создаём исполняемый файл (запускает control script в Terminal)
+    cat > "$app_path/Contents/MacOS/Dostup_VPN" << 'LAUNCHER'
+#!/bin/bash
+open -a Terminal "$HOME/dostup/Dostup_VPN.command"
+LAUNCHER
+
+    chmod +x "$app_path/Contents/MacOS/Dostup_VPN"
+
+    print_success "Приложение Dostup_VPN создано на рабочем столе"
 }
 
 # Запуск mihomo

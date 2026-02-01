@@ -107,7 +107,7 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 ```bash
 sudo pkill mihomo
 rm -rf ~/dostup
-rm ~/Desktop/Dostup_VPN.command
+rm -rf ~/Desktop/Dostup_VPN.app
 ```
 
 ### Windows (PowerShell от администратора)

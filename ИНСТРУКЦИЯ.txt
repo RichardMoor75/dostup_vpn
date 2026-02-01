@@ -113,5 +113,5 @@ https://metacubex.github.io/metacubexd/
 
    sudo pkill mihomo
    rm -rf ~/dostup
-   rm ~/Desktop/Dostup_VPN.command
+   rm -rf ~/Desktop/Dostup_VPN.app
 
