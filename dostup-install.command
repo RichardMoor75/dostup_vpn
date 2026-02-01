@@ -402,7 +402,7 @@ download_with_retry() {
 
 validate_yaml() {
     local content=$(head -c 1000 "$1" 2>/dev/null)
-    ! echo "$content" | grep -qiE '<!DOCTYPE|<html' && echo "$content" | grep -qE '^[a-zA-Z_-]+:|^\s*-\s+'
+    ! echo "$content" | grep -qiE '<!DOCTYPE|<html|<head' && echo "$content" | grep -qE '^[a-zA-Z_-]+:|^\s*-\s+'
 }
 
 do_check_access() {
@@ -415,9 +415,9 @@ do_check_access() {
         return 1
     fi
 
-    # Читаем сайты из JSON
+    # Читаем сайты из JSON (безопасно через env variable)
     local sites
-    sites=$(python3 -c "import json; print('\n'.join(json.load(open('$SITES_FILE'))['sites']))" 2>/dev/null)
+    sites=$(SITES_FILE="$SITES_FILE" python3 -c "import json, os; print('\n'.join(json.load(open(os.environ['SITES_FILE']))['sites']))" 2>/dev/null)
 
     if [[ -z "$sites" ]]; then
         echo -e "${RED}✗ Не удалось прочитать список сайтов${NC}"
@@ -890,5 +890,4 @@ echo "Окно закроется через 5 секунд..."
 sleep 5
 (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
 disown
-exit 0
 exit 0
