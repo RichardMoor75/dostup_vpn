@@ -66,6 +66,7 @@ irm https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.ps1 | iex
 - [x] Переписаны инструкции для пользователей (ASCII-схема меню, подробные шаги, troubleshooting)
 - [x] Добавлен файл LICENSE (MIT)
 - [x] Код-ревью: удалён дублированный exit, исправлено unsafe чтение sites.json, согласована проверка `<head` в validate_yaml
+- [x] macOS: заменён .command ярлык на .app bundle (Dostup_VPN.app) — нет видимого расширения
 
 ## ВАЖНО: Workflow
 - **После любых изменений в скриптах — ВСЕГДА копировать в `/media/rishat/Cloud/rawfiles/rawfiles/Install/dostup_vpn/`**
