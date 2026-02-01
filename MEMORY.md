@@ -62,6 +62,10 @@ irm https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.ps1 | iex
 - [x] Остановка mihomo: цикл ожидания с timeout вместо фиксированного sleep (race condition fix)
 - [x] macOS: фикс закрытия окна терминала (osascript в фоне + disown, чтобы не было диалога подтверждения)
 - [x] Проверка доступа к ресурсам: опция в меню + `sites.json` с редактируемым списком сайтов
+- [x] Добавлен flibusta.is в список сайтов по умолчанию
+- [x] Переписаны инструкции для пользователей (ASCII-схема меню, подробные шаги, troubleshooting)
+- [x] Добавлен файл LICENSE (MIT)
+- [x] Код-ревью: удалён дублированный exit, исправлено unsafe чтение sites.json, согласована проверка `<head` в validate_yaml
 
 ## ВАЖНО: Workflow
 - **После любых изменений в скриптах — ВСЕГДА копировать в `/media/rishat/Cloud/rawfiles/rawfiles/Install/dostup_vpn/`**
