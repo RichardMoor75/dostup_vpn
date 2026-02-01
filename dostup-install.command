@@ -543,7 +543,9 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Окно закроется через 3 секунды..."
             sleep 3
-            osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || exit 0
+            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+            disown
+            exit 0
             ;;
         2)
             do_stop
@@ -552,7 +554,9 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Окно закроется через 5 секунд..."
             sleep 5
-            osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || exit 0
+            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+            disown
+            exit 0
             ;;
         *)
             echo ""
@@ -560,7 +564,9 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Окно закроется через 2 секунды..."
             sleep 2
-            osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || exit 0
+            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+            disown
+            exit 0
             ;;
     esac
 else
@@ -569,7 +575,9 @@ else
     echo ""
     echo "Окно закроется через 5 секунд..."
     sleep 5
-    osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || exit 0
+    (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+    disown
+    exit 0
 fi
 CONTROLSCRIPT
 
@@ -818,5 +826,7 @@ fi
 echo ""
 echo "Окно закроется через 5 секунд..."
 sleep 5
-osascript -e 'tell application "Terminal" to close front window saving no' 2>/dev/null || read -p "Нажмите Enter для закрытия..."
+(sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+disown
+exit 0
 exit 0

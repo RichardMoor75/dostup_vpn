@@ -59,6 +59,7 @@ irm https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.ps1 | iex
 - [x] macOS: защита от injection в osascript (экранирование кавычек)
 - [x] macOS: защита от injection в Python (передача через env variables)
 - [x] Остановка mihomo: цикл ожидания с timeout вместо фиксированного sleep (race condition fix)
+- [x] macOS: фикс закрытия окна терминала (osascript в фоне + disown, чтобы не было диалога подтверждения)
 
 ## ВАЖНО: Workflow
 - **После любых изменений в скриптах — ВСЕГДА копировать в `/media/rishat/Cloud/rawfiles/rawfiles/Install/dostup_vpn/`**
