@@ -316,7 +316,7 @@ if ($geoSuccess) {
 }
 # Write JSON without BOM for old PowerShell compatibility
 $settingsJson = $settings | ConvertTo-Json
-[System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, (New-Object System.Text.UTF8Encoding($false)))
 
 # Create sites.json for access checking
 $sitesFile = "$DOSTUP_DIR\sites.json"
@@ -332,7 +332,7 @@ if (-not (Test-Path $sitesFile)) {
         )
     }
     $sitesJson = $sitesContent | ConvertTo-Json
-    [System.IO.File]::WriteAllText($sitesFile, $sitesJson, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($sitesFile, $sitesJson, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 Write-Step 'Creating control script...'
@@ -438,7 +438,7 @@ function Stop-Mihomo {
 function Save-Settings($s) {
     # Write JSON without BOM (old PowerShell adds BOM with Set-Content -Encoding UTF8)
     $json = $s | ConvertTo-Json
-    [System.IO.File]::WriteAllText($SETTINGS_FILE, $json, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($SETTINGS_FILE, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 function Start-Mihomo {
