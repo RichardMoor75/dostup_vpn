@@ -314,7 +314,9 @@ $settings = @{
 if ($geoSuccess) {
     $settings.last_geo_update = (Get-Date -Format 'yyyy-MM-dd')
 }
-$settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
+# Write JSON without BOM for old PowerShell compatibility
+$settingsJson = $settings | ConvertTo-Json
+[System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, [System.Text.UTF8Encoding]::new($false))
 
 # Create sites.json for access checking
 $sitesFile = "$DOSTUP_DIR\sites.json"
@@ -329,7 +331,8 @@ if (-not (Test-Path $sitesFile)) {
             "flibusta.is"
         )
     }
-    $sitesContent | ConvertTo-Json | Set-Content -Path $sitesFile -Encoding UTF8
+    $sitesJson = $sitesContent | ConvertTo-Json
+    [System.IO.File]::WriteAllText($sitesFile, $sitesJson, [System.Text.UTF8Encoding]::new($false))
 }
 
 Write-Step 'Creating control script...'
@@ -432,8 +435,22 @@ function Stop-Mihomo {
     }
 }
 
+function Save-Settings($s) {
+    # Write JSON without BOM (old PowerShell adds BOM with Set-Content -Encoding UTF8)
+    $json = $s | ConvertTo-Json
+    [System.IO.File]::WriteAllText($SETTINGS_FILE, $json, [System.Text.UTF8Encoding]::new($false))
+}
+
 function Start-Mihomo {
-    $settings = Get-Content $SETTINGS_FILE | ConvertFrom-Json
+    # Read settings with fallback
+    $settings = $null
+    try {
+        $content = Get-Content $SETTINGS_FILE -Raw -ErrorAction Stop
+        $settings = $content | ConvertFrom-Json
+    } catch {
+        Write-Info 'Could not read settings, using defaults'
+        $settings = @{ subscription_url = ''; installed_version = '' }
+    }
 
     Write-Step 'Checking for core updates...'
     try {
@@ -461,7 +478,7 @@ function Start-Mihomo {
                     Rename-Item -Path $exe.FullName -NewName 'mihomo.exe' -Force
                 }
                 $settings.installed_version = $latest
-                $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
+                Save-Settings $settings
                 Write-OK 'Core updated'
             } else { Write-Fail 'Update failed, using current version' }
         } else { Write-OK 'Core is up to date' }
@@ -500,7 +517,7 @@ function Start-Mihomo {
         if (-not (Invoke-DownloadWithRetry $GEOSITE_URL "$DOSTUP_DIR\geosite.dat")) { $geoOk = $false }
         if ($geoOk) {
             $settings.last_geo_update = (Get-Date -Format 'yyyy-MM-dd')
-            $settings | ConvertTo-Json | Set-Content -Path $SETTINGS_FILE -Encoding UTF8
+            Save-Settings $settings
             Write-OK 'Geo databases updated'
         }
     }
