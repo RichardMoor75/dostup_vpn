@@ -173,11 +173,12 @@ Write-OK "Architecture: $arch"
 
 Write-Step 'Getting latest mihomo version...'
 try {
-    $release = Invoke-RestMethod -Uri $MIHOMO_API -UseBasicParsing
+    $headers = @{ 'User-Agent' = 'Dostup-Installer' }
+    $release = Invoke-RestMethod -Uri $MIHOMO_API -Headers $headers
     $version = $release.tag_name
     Write-OK "Version: $version"
 } catch {
-    Write-Fail 'Failed to get version'
+    Write-Fail "Failed to get version: $_"
     Read-Host 'Press Enter to close'
     exit 1
 }
@@ -429,7 +430,8 @@ function Start-Mihomo {
 
     Write-Step 'Checking for core updates...'
     try {
-        $rel = Invoke-RestMethod -Uri $MIHOMO_API -UseBasicParsing
+        $headers = @{ 'User-Agent' = 'Dostup-Installer' }
+        $rel = Invoke-RestMethod -Uri $MIHOMO_API -Headers $headers
         $latest = $rel.tag_name
         if ($settings.installed_version -ne $latest) {
             Write-Step "Updating: $($settings.installed_version) -> $latest"
