@@ -14,7 +14,7 @@
 
 ШАГ 2: Скопируйте эту команду целиком:
 
-   curl -sL https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.command | bash
+   curl -sL https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command | bash
 
 ШАГ 3: Вставьте команду в Terminal и нажмите Enter
 
