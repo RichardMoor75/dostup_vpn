@@ -3,6 +3,9 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Enable TLS 1.2 for older Windows versions (Win 7/8)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $DOSTUP_DIR = "$env:USERPROFILE\dostup"
 $LOGS_DIR = "$DOSTUP_DIR\logs"
 $CONFIG_FILE = "$DOSTUP_DIR\config.yaml"
@@ -324,6 +327,9 @@ if (-not (Test-Path $sitesFile)) {
 Write-Step 'Creating control script...'
 
 $controlPs1 = @'
+# Enable TLS 1.2 for older Windows versions (Win 7/8)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $DOSTUP_DIR = "$env:USERPROFILE\dostup"
 $SETTINGS_FILE = "$DOSTUP_DIR\settings.json"
 $MIHOMO_BIN = "$DOSTUP_DIR\mihomo.exe"
