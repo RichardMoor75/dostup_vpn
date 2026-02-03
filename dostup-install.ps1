@@ -184,7 +184,14 @@ try {
 }
 
 Write-Step 'Downloading mihomo...'
-$filename = "mihomo-windows-$arch-$version.zip"
+# Use compatible build for older Windows (7/8/8.1)
+$osVersion = [Environment]::OSVersion.Version
+if ($osVersion.Major -lt 10 -and $arch -eq 'amd64') {
+    $filename = "mihomo-windows-$arch-compatible-$version.zip"
+    Write-Info "Using compatible build for Windows $($osVersion.Major).$($osVersion.Minor)"
+} else {
+    $filename = "mihomo-windows-$arch-$version.zip"
+}
 $downloadUrl = "https://github.com/MetaCubeX/mihomo/releases/download/$version/$filename"
 $zipPath = "$DOSTUP_DIR\mihomo.zip"
 
@@ -437,7 +444,13 @@ function Start-Mihomo {
             Write-Step "Updating: $($settings.installed_version) -> $latest"
             $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
             if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $arch = 'arm64' }
-            $fn = "mihomo-windows-$arch-$latest.zip"
+            # Use compatible build for older Windows (7/8/8.1)
+            $osVer = [Environment]::OSVersion.Version
+            if ($osVer.Major -lt 10 -and $arch -eq 'amd64') {
+                $fn = "mihomo-windows-$arch-compatible-$latest.zip"
+            } else {
+                $fn = "mihomo-windows-$arch-$latest.zip"
+            }
             $url = "https://github.com/MetaCubeX/mihomo/releases/download/$latest/$fn"
             if (Invoke-DownloadWithRetry $url "$DOSTUP_DIR\m.zip") {
                 Expand-ZipFile "$DOSTUP_DIR\m.zip" $DOSTUP_DIR
