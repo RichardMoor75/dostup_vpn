@@ -25,7 +25,7 @@ DESKTOP_DIR="$HOME/Desktop"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
 GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
-ICON_URL="https://files.richard-moor.ru/Install/dostup_vpn/icon.icns"
+ICON_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon.icns"
 
 # --- Функции ---
 

@@ -16,7 +16,7 @@ $DESKTOP = [Environment]::GetFolderPath('Desktop')
 $MIHOMO_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest'
 $GEOIP_URL = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat'
 $GEOSITE_URL = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat'
-$ICON_URL = 'https://files.richard-moor.ru/Install/dostup_vpn/icon.ico'
+$ICON_URL = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon.ico'
 
 function Write-Step($text) { Write-Host "> $text" -ForegroundColor Yellow }
 function Write-OK($text) { Write-Host "[OK] $text" -ForegroundColor Green }
