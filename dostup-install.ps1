@@ -293,15 +293,15 @@ if (-not (Test-ValidYaml $tempConfig)) {
 Move-Item $tempConfig $CONFIG_FILE -Force
 Write-OK 'Config downloaded and verified'
 
-# Disable TUN mode for older Windows (7/8/8.1) - TUN driver requires Win 10+
+# Remove TUN block for older Windows (7/8/8.1) - TUN driver requires Win 10+
 $osVersion = [Environment]::OSVersion.Version
 if ($osVersion.Major -lt 10) {
-    Write-Step 'Disabling TUN mode (not supported on Windows < 10)...'
+    Write-Step 'Removing TUN mode (not supported on Windows < 10)...'
     $configContent = Get-Content $CONFIG_FILE -Raw
-    $configContent = $configContent -replace '(tun:\s*[\r\n]+\s*)enable:\s*true', '$1enable: false'
+    # Remove entire tun: block (tun: line + all indented lines below it)
+    $configContent = $configContent -replace '(?m)^tun:\s*[\r\n]+(?:^[ \t]+[^\r\n]*[\r\n]+)*', ''
     [System.IO.File]::WriteAllText($CONFIG_FILE, $configContent, (New-Object System.Text.UTF8Encoding($false)))
-    Write-OK 'TUN disabled, using system proxy mode'
-    Write-Info "Configure proxy: 127.0.0.1:2080 (HTTP/SOCKS)"
+    Write-OK 'TUN removed, using system proxy mode'
 }
 
 Write-Step 'Downloading geo databases...'
@@ -397,6 +397,36 @@ function Expand-ZipFile($zipPath, $destPath) {
     }
 }
 
+function Get-ProxyPort {
+    $port = 2080
+    if (Test-Path $CONFIG_FILE) {
+        $cfg = Get-Content $CONFIG_FILE -Raw
+        if ($cfg -match 'mixed-port:\s*(\d+)') { $port = $matches[1] }
+    }
+    return $port
+}
+
+function Enable-SystemProxy {
+    $osVer = [Environment]::OSVersion.Version
+    if ($osVer.Major -lt 10) {
+        $port = Get-ProxyPort
+        $proxy = "127.0.0.1:$port"
+        $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        Set-ItemProperty -Path $reg -Name ProxyEnable -Value 1
+        Set-ItemProperty -Path $reg -Name ProxyServer -Value $proxy
+        Write-OK "System proxy enabled: $proxy"
+    }
+}
+
+function Disable-SystemProxy {
+    $osVer = [Environment]::OSVersion.Version
+    if ($osVer.Major -lt 10) {
+        $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        Set-ItemProperty -Path $reg -Name ProxyEnable -Value 0
+        Write-OK 'System proxy disabled'
+    }
+}
+
 function Test-SiteAccess {
     Write-Host ''
     Write-Step 'Проверка доступа к ресурсам...'
@@ -415,9 +445,24 @@ function Test-SiteAccess {
         return
     }
 
+    # Use proxy for Windows < 10 (TUN not available)
+    $useProxy = $false
+    $proxyUrl = $null
+    $osVer = [Environment]::OSVersion.Version
+    if ($osVer.Major -lt 10) {
+        $port = Get-ProxyPort
+        $proxyUrl = "http://127.0.0.1:$port"
+        $useProxy = $true
+        Write-Info "Проверка через прокси $proxyUrl"
+    }
+
     foreach ($site in $sites) {
         try {
-            $null = Invoke-WebRequest -Uri "https://$site" -Method Head -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+            if ($useProxy) {
+                $null = Invoke-WebRequest -Uri "https://$site" -Method Head -TimeoutSec 10 -UseBasicParsing -Proxy $proxyUrl -ErrorAction Stop
+            } else {
+                $null = Invoke-WebRequest -Uri "https://$site" -Method Head -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+            }
             Write-Host "[OK] $site — доступен" -ForegroundColor Green
         } catch {
             Write-Host "[X] $site — недоступен" -ForegroundColor Red
@@ -438,6 +483,7 @@ function Stop-Mihomo {
     }
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
     if (-not $proc) {
+        Disable-SystemProxy
         Write-OK 'Mihomo stopped'
         return $true
     } else {
@@ -501,11 +547,11 @@ function Start-Mihomo {
     if (Invoke-DownloadWithRetry $settings.subscription_url $tempCfg) {
         if (Test-ValidYaml $tempCfg) {
             Move-Item $tempCfg $CONFIG_FILE -Force
-            # Disable TUN for older Windows
+            # Remove TUN block for older Windows
             $osVer = [Environment]::OSVersion.Version
             if ($osVer.Major -lt 10) {
                 $cfgContent = Get-Content $CONFIG_FILE -Raw
-                $cfgContent = $cfgContent -replace '(tun:\s*[\r\n]+\s*)enable:\s*true', '$1enable: false'
+                $cfgContent = $cfgContent -replace '(?m)^tun:\s*[\r\n]+(?:^[ \t]+[^\r\n]*[\r\n]+)*', ''
                 [System.IO.File]::WriteAllText($CONFIG_FILE, $cfgContent, (New-Object System.Text.UTF8Encoding($false)))
             }
             Write-OK 'Config updated'
@@ -547,6 +593,7 @@ function Start-Mihomo {
 
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
     if ($proc) {
+        Enable-SystemProxy
         Write-Host ''
         Write-Host '============================================' -ForegroundColor Green
         Write-Host '[OK] Mihomo started successfully!' -ForegroundColor Green
@@ -676,6 +723,18 @@ Start-Sleep -Seconds 3
 
 $process = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
 if ($process) {
+    # Enable system proxy for Windows < 10
+    $osVersion = [Environment]::OSVersion.Version
+    if ($osVersion.Major -lt 10) {
+        $proxyPort = 2080
+        $cfgContent = Get-Content $CONFIG_FILE -Raw
+        if ($cfgContent -match 'mixed-port:\s*(\d+)') { $proxyPort = $matches[1] }
+        $proxyServer = "127.0.0.1:$proxyPort"
+        $regPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        Set-ItemProperty -Path $regPath -Name ProxyEnable -Value 1
+        Set-ItemProperty -Path $regPath -Name ProxyServer -Value $proxyServer
+        Write-OK "System proxy enabled: $proxyServer"
+    }
     Write-Host ''
     Write-Host '============================================' -ForegroundColor Green
     Write-Host '    Installation completed!' -ForegroundColor Green
