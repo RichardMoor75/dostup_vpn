@@ -293,6 +293,17 @@ if (-not (Test-ValidYaml $tempConfig)) {
 Move-Item $tempConfig $CONFIG_FILE -Force
 Write-OK 'Config downloaded and verified'
 
+# Disable TUN mode for older Windows (7/8/8.1) - TUN driver requires Win 10+
+$osVersion = [Environment]::OSVersion.Version
+if ($osVersion.Major -lt 10) {
+    Write-Step 'Disabling TUN mode (not supported on Windows < 10)...'
+    $configContent = Get-Content $CONFIG_FILE -Raw
+    $configContent = $configContent -replace '(tun:\s*[\r\n]+\s*)enable:\s*true', '$1enable: false'
+    [System.IO.File]::WriteAllText($CONFIG_FILE, $configContent, (New-Object System.Text.UTF8Encoding($false)))
+    Write-OK 'TUN disabled, using system proxy mode'
+    Write-Info "Configure proxy: 127.0.0.1:2080 (HTTP/SOCKS)"
+}
+
 Write-Step 'Downloading geo databases...'
 $geoSuccess = $true
 if (-not (Invoke-DownloadWithRetry $GEOIP_URL "$DOSTUP_DIR\geoip.dat")) {
@@ -490,6 +501,13 @@ function Start-Mihomo {
     if (Invoke-DownloadWithRetry $settings.subscription_url $tempCfg) {
         if (Test-ValidYaml $tempCfg) {
             Move-Item $tempCfg $CONFIG_FILE -Force
+            # Disable TUN for older Windows
+            $osVer = [Environment]::OSVersion.Version
+            if ($osVer.Major -lt 10) {
+                $cfgContent = Get-Content $CONFIG_FILE -Raw
+                $cfgContent = $cfgContent -replace '(tun:\s*[\r\n]+\s*)enable:\s*true', '$1enable: false'
+                [System.IO.File]::WriteAllText($CONFIG_FILE, $cfgContent, (New-Object System.Text.UTF8Encoding($false)))
+            }
             Write-OK 'Config updated'
         } else {
             Write-Fail 'Invalid YAML, using old config'
