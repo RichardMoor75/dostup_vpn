@@ -67,6 +67,16 @@ irm https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.ps1 | iex
 - [x] Добавлен файл LICENSE (MIT)
 - [x] Код-ревью: удалён дублированный exit, исправлено unsafe чтение sites.json, согласована проверка `<head` в validate_yaml
 - [x] macOS: заменён .command ярлык на .app bundle (Dostup_VPN.app) — нет видимого расширения
+- [x] Windows 7/8/8.1: полная поддержка старых систем:
+  - TLS 1.2 включается явно (старый PowerShell использует TLS 1.0 по умолчанию)
+  - User-Agent header для GitHub API (без него 403)
+  - Синтаксис New-Object вместо ::new() (PowerShell 4 совместимость)
+  - JSON без BOM (WriteAllText вместо Set-Content -Encoding UTF8)
+  - Чтение settings.json с try/catch и fallback
+  - Compatible build mihomo для старых Windows (mihomo-windows-amd64-compatible)
+  - TUN блок удаляется из конфига (драйвер wintun проблемный на Win 8)
+  - Автоматическая настройка системного прокси (реестр) при запуске/остановке
+  - Проверка доступа к сайтам через прокси
 
 ## ВАЖНО: Workflow
 - **После любых изменений в скриптах — ВСЕГДА копировать в `/media/rishat/Cloud/rawfiles/rawfiles/Install/dostup_vpn/`**
@@ -77,7 +87,8 @@ irm https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.ps1 | iex
 - GUI диалоги через osascript могут не работать на Mac без Xcode — используется fallback на терминал
 - SHA256 файлы не публикуются для mihomo — проверка пропускается если хэш недоступен
 - Windows Firewall: автонастройка через netsh с UAC (удаляет все правила для mihomo.exe включая блокировки, создаёт разрешающие)
-- Windows 7/8 поддерживается: fallback для PowerShell < 5 (Expand-ZipFile, Get-FileSHA256) и netsh для брандмауэра
+- Windows 7/8/8.1 полностью поддерживается: compatible build, системный прокси вместо TUN, совместимый синтаксис PowerShell
+- Firefox на Win 7/8 может требовать ручной настройки прокси (Настройки → Сеть → "Использовать системные настройки прокси")
 - macOS Application Firewall: автонастройка через socketfilterfw (--add и --unblockapp)
 - Безопасность: все входные данные экранируются перед использованием в osascript/python
 - Остановка процесса: используется цикл ожидания (до 10 сек) для надёжности
