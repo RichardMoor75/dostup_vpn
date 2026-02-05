@@ -160,9 +160,10 @@ ask_input() {
 
     # Пробуем osascript (GUI диалог)
     result=$(osascript -e "set result to text returned of (display dialog \"$safe_prompt\" default answer \"$safe_default\" buttons {\"OK\"} default button 1)" 2>/dev/null)
+    local osascript_exit=$?
 
-    # Если osascript не сработал - используем терминал
-    if [[ -z "$result" ]]; then
+    # Если osascript не сработал (ошибка GUI) - используем терминал
+    if [[ $osascript_exit -ne 0 ]]; then
         echo ""
         read -p "$prompt " result < /dev/tty
     fi
@@ -207,7 +208,7 @@ download_with_retry() {
     local retry=0
 
     while [[ $retry -lt $max_retries ]]; do
-        if curl -L -# -o "$output" "$url" 2>/dev/null; then
+        if curl -fL -# -o "$output" "$url" 2>/dev/null; then
             return 0
         fi
         retry=$((retry + 1))
@@ -390,7 +391,7 @@ download_with_retry() {
     local output="$2"
     local retry=0
     while [[ $retry -lt 3 ]]; do
-        if curl -L -# -o "$output" "$url" 2>/dev/null; then
+        if curl -fL -# -o "$output" "$url" 2>/dev/null; then
             return 0
         fi
         retry=$((retry + 1))
@@ -548,8 +549,11 @@ do_start() {
     sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
     sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
 
+    # Создаём лог-файл от текущего пользователя (чтобы не был root-owned)
+    : > "$DOSTUP_DIR/logs/mihomo.log"
+
     # Запускаем
-    sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' > '$DOSTUP_DIR/logs/mihomo.log' 2>&1 &"
+    sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' >> '$DOSTUP_DIR/logs/mihomo.log' 2>&1 &"
 
     sleep 2
 
@@ -659,24 +663,6 @@ download_icon() {
     fi
 }
 
-# Применение иконки к файлу (macOS)
-apply_icon() {
-    local target="$1"
-    local icon="$DOSTUP_DIR/icon.icns"
-
-    if [[ ! -f "$icon" ]]; then
-        return 1
-    fi
-
-    # Используем JavaScript for Automation для применения иконки
-    osascript -l JavaScript -e "
-        ObjC.import('AppKit');
-        var workspace = \$.NSWorkspace.sharedWorkspace;
-        var image = \$.NSImage.alloc.initWithContentsOfFile('$icon');
-        workspace.setIconForFileOptions(image, '$target', 0);
-    " 2>/dev/null
-}
-
 # Создание .app bundle на рабочем столе
 create_desktop_shortcuts() {
     print_step "Создание приложения на рабочем столе..."
@@ -717,7 +703,7 @@ create_desktop_shortcuts() {
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>LSMinimumSystemVersion</key>
-    <string>10.13</string>
+    <string>10.15</string>
 </dict>
 </plist>
 PLIST
@@ -748,8 +734,11 @@ start_mihomo() {
     sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
     sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
 
+    # Создаём лог-файл от текущего пользователя (чтобы не был root-owned)
+    : > "$LOGS_DIR/mihomo.log"
+
     # Запускаем полностью отвязанным от терминала
-    sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' > '$LOGS_DIR/mihomo.log' 2>&1 &"
+    sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' >> '$LOGS_DIR/mihomo.log' 2>&1 &"
 
     sleep 2
 

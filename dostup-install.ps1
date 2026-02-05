@@ -66,7 +66,21 @@ function Expand-ZipFile($zipPath, $destPath) {
         Expand-Archive -Path $zipPath -DestinationPath $destPath -Force
     } else {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destPath)
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+        try {
+            foreach ($entry in $archive.Entries) {
+                $entryPath = Join-Path $destPath $entry.FullName
+                $entryDir = Split-Path $entryPath -Parent
+                if (-not (Test-Path $entryDir)) {
+                    New-Item -ItemType Directory -Path $entryDir -Force | Out-Null
+                }
+                if ($entry.FullName -notmatch '[\\/]$') {
+                    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $entryPath, $true)
+                }
+            }
+        } finally {
+            $archive.Dispose()
+        }
     }
 }
 
@@ -393,7 +407,21 @@ function Expand-ZipFile($zipPath, $destPath) {
         Expand-Archive -Path $zipPath -DestinationPath $destPath -Force
     } else {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destPath)
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+        try {
+            foreach ($entry in $archive.Entries) {
+                $entryPath = Join-Path $destPath $entry.FullName
+                $entryDir = Split-Path $entryPath -Parent
+                if (-not (Test-Path $entryDir)) {
+                    New-Item -ItemType Directory -Path $entryDir -Force | Out-Null
+                }
+                if ($entry.FullName -notmatch '[\\/]$') {
+                    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $entryPath, $true)
+                }
+            }
+        } finally {
+            $archive.Dispose()
+        }
     }
 }
 
@@ -414,7 +442,7 @@ function Enable-SystemProxy {
         $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
         Set-ItemProperty -Path $reg -Name ProxyEnable -Value 1
         Set-ItemProperty -Path $reg -Name ProxyServer -Value $proxy
-        Write-OK "System proxy enabled: $proxy"
+        Write-OK "Системный прокси включён: $proxy"
     }
 }
 
@@ -423,7 +451,7 @@ function Disable-SystemProxy {
     if ($osVer.Major -lt 10) {
         $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
         Set-ItemProperty -Path $reg -Name ProxyEnable -Value 0
-        Write-OK 'System proxy disabled'
+        Write-OK 'Системный прокси отключён'
     }
 }
 
@@ -473,7 +501,7 @@ function Test-SiteAccess {
 }
 
 function Stop-Mihomo {
-    Write-Step 'Stopping Mihomo (requires admin)...'
+    Write-Step 'Остановка Mihomo (требуются права администратора)...'
     Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
     # Wait with timeout
     $stopTimeout = 10
@@ -484,10 +512,10 @@ function Stop-Mihomo {
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
     if (-not $proc) {
         Disable-SystemProxy
-        Write-OK 'Mihomo stopped'
+        Write-OK 'Mihomo остановлен'
         return $true
     } else {
-        Write-Fail 'Could not stop. Try restarting your computer.'
+        Write-Fail 'Не удалось остановить. Попробуйте перезагрузить компьютер.'
         return $false
     }
 }
@@ -505,17 +533,17 @@ function Start-Mihomo {
         $content = Get-Content $SETTINGS_FILE -Raw -ErrorAction Stop
         $settings = $content | ConvertFrom-Json
     } catch {
-        Write-Info 'Could not read settings, using defaults'
+        Write-Info 'Не удалось прочитать настройки'
         $settings = @{ subscription_url = ''; installed_version = '' }
     }
 
-    Write-Step 'Checking for core updates...'
+    Write-Step 'Проверка обновлений ядра...'
     try {
         $headers = @{ 'User-Agent' = 'Dostup-Installer' }
         $rel = Invoke-RestMethod -Uri $MIHOMO_API -Headers $headers
         $latest = $rel.tag_name
         if ($settings.installed_version -ne $latest) {
-            Write-Step "Updating: $($settings.installed_version) -> $latest"
+            Write-Step "Обновление: $($settings.installed_version) → $latest"
             $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
             if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $arch = 'arm64' }
             # Use compatible build for older Windows (7/8/8.1)
@@ -536,12 +564,12 @@ function Start-Mihomo {
                 }
                 $settings.installed_version = $latest
                 Save-Settings $settings
-                Write-OK 'Core updated'
-            } else { Write-Fail 'Update failed, using current version' }
-        } else { Write-OK 'Core is up to date' }
-    } catch { Write-OK 'Core is up to date' }
+                Write-OK 'Ядро обновлено'
+            } else { Write-Fail 'Не удалось обновить, используем текущую версию' }
+        } else { Write-OK 'Ядро актуально' }
+    } catch { Write-OK 'Ядро актуально' }
 
-    Write-Step 'Downloading config...'
+    Write-Step 'Скачивание конфига...'
     if (Test-Path $CONFIG_FILE) { Copy-Item $CONFIG_FILE "$CONFIG_FILE.backup" -Force }
     $tempCfg = "$CONFIG_FILE.tmp"
     if (Invoke-DownloadWithRetry $settings.subscription_url $tempCfg) {
@@ -554,14 +582,14 @@ function Start-Mihomo {
                 $cfgContent = $cfgContent -replace '(?m)^tun:\s*[\r\n]+(?:^[ \t]+[^\r\n]*[\r\n]+)*', ''
                 [System.IO.File]::WriteAllText($CONFIG_FILE, $cfgContent, (New-Object System.Text.UTF8Encoding($false)))
             }
-            Write-OK 'Config updated'
+            Write-OK 'Конфиг обновлён'
         } else {
-            Write-Fail 'Invalid YAML, using old config'
+            Write-Fail 'Невалидный YAML, используем старый конфиг'
             Remove-Item $tempCfg -Force -ErrorAction SilentlyContinue
             if (Test-Path "$CONFIG_FILE.backup") { Move-Item "$CONFIG_FILE.backup" $CONFIG_FILE -Force }
         }
     } else {
-        Write-Fail 'Using old config'
+        Write-Fail 'Используем старый конфиг'
         if (Test-Path "$CONFIG_FILE.backup") { Move-Item "$CONFIG_FILE.backup" $CONFIG_FILE -Force }
     }
 
@@ -575,20 +603,20 @@ function Start-Mihomo {
     } catch { $shouldUpdateGeo = $true }
 
     if ($shouldUpdateGeo) {
-        Write-Step 'Updating geo databases...'
+        Write-Step 'Обновление geo-баз...'
         $geoOk = $true
         if (-not (Invoke-DownloadWithRetry $GEOIP_URL "$DOSTUP_DIR\geoip.dat")) { $geoOk = $false }
         if (-not (Invoke-DownloadWithRetry $GEOSITE_URL "$DOSTUP_DIR\geosite.dat")) { $geoOk = $false }
         if ($geoOk) {
             $settings.last_geo_update = (Get-Date -Format 'yyyy-MM-dd')
             Save-Settings $settings
-            Write-OK 'Geo databases updated'
+            Write-OK 'Geo-базы обновлены'
         }
     }
 
-    Write-Step 'Starting Mihomo...'
+    Write-Step 'Запуск Mihomo...'
     Write-Host ''
-    Start-Process -FilePath $MIHOMO_BIN -ArgumentList "-d `"$DOSTUP_DIR`"" -Verb RunAs -WindowStyle Hidden
+    Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
     Start-Sleep -Seconds 3
 
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
@@ -596,15 +624,15 @@ function Start-Mihomo {
         Enable-SystemProxy
         Write-Host ''
         Write-Host '============================================' -ForegroundColor Green
-        Write-Host '[OK] Mihomo started successfully!' -ForegroundColor Green
+        Write-Host '[OK] Mihomo успешно запущен!' -ForegroundColor Green
         Write-Host '============================================' -ForegroundColor Green
         Write-Host ''
-        Write-Host 'Panel: https://metacubex.github.io/metacubexd/'
+        Write-Host 'Панель: https://metacubex.github.io/metacubexd/'
         Write-Host 'API: 127.0.0.1:9090'
         return $true
     } else {
-        Write-Fail 'Failed to start'
-        Write-Host "Logs: $DOSTUP_DIR\logs"
+        Write-Fail 'Не удалось запустить'
+        Write-Host "Логи: $DOSTUP_DIR\logs"
         return $false
     }
 }
@@ -617,24 +645,24 @@ Write-Host ''
 
 $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
 if ($proc) {
-    # Mihomo is running - show menu
-    Write-Host 'Mihomo is running' -ForegroundColor Green
+    # Mihomo запущен — показываем меню
+    Write-Host 'Mihomo работает' -ForegroundColor Green
     Write-Host ''
-    Write-Host 'Panel: https://metacubex.github.io/metacubexd/'
+    Write-Host 'Панель: https://metacubex.github.io/metacubexd/'
     Write-Host 'API: 127.0.0.1:9090'
     Write-Host ''
-    Write-Host '1) Stop'
-    Write-Host '2) Restart'
-    Write-Host '3) Check access'
-    Write-Host '4) Cancel'
+    Write-Host '1) Остановить'
+    Write-Host '2) Перезапустить'
+    Write-Host '3) Проверить доступ'
+    Write-Host '4) Отмена'
     Write-Host ''
-    $choice = Read-Host 'Choose (1-4)'
+    $choice = Read-Host 'Выберите (1-4)'
 
     switch ($choice) {
         '1' {
             Stop-Mihomo
             Write-Host ''
-            Write-Host 'Window will close in 3 seconds...'
+            Write-Host 'Окно закроется через 3 секунды...'
             Start-Sleep -Seconds 3
         }
         '2' {
@@ -642,26 +670,26 @@ if ($proc) {
             Write-Host ''
             Start-Mihomo
             Write-Host ''
-            Write-Host 'Window will close in 5 seconds...'
+            Write-Host 'Окно закроется через 5 секунд...'
             Start-Sleep -Seconds 5
         }
         '3' {
             Test-SiteAccess
-            Read-Host 'Press Enter to close'
+            Read-Host 'Нажмите Enter для закрытия'
         }
         default {
             Write-Host ''
-            Write-Host 'Cancelled'
+            Write-Host 'Отменено'
             Write-Host ''
-            Write-Host 'Window will close in 2 seconds...'
+            Write-Host 'Окно закроется через 2 секунды...'
             Start-Sleep -Seconds 2
         }
     }
 } else {
-    # Mihomo is not running - start without asking
+    # Mihomo не запущен — запускаем
     Start-Mihomo
     Write-Host ''
-    Write-Host 'Window will close in 5 seconds...'
+    Write-Host 'Окно закроется через 5 секунд...'
     Start-Sleep -Seconds 5
 }
 '@
@@ -718,7 +746,7 @@ try {
 
 Write-Step 'Starting Mihomo...'
 Write-Host ''
-Start-Process -FilePath $MIHOMO_BIN -ArgumentList "-d `"$DOSTUP_DIR`"" -Verb RunAs -WindowStyle Hidden
+Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
 Start-Sleep -Seconds 3
 
 $process = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
