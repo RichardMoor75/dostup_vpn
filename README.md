@@ -1,6 +1,6 @@
 # Dostup VPN
 
-Простой установщик [Mihomo](https://github.com/MetaCubeX/mihomo) (Meta Clash Core) для macOS и Windows. Одна команда — и VPN готов к работе.
+Простой установщик [Mihomo](https://github.com/MetaCubeX/mihomo) (Meta Clash Core) для macOS, Windows и Linux. Одна команда — и VPN готов к работе.
 
 ## Установка
 
@@ -20,24 +20,34 @@ curl -sL https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostu
 irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1 | iex
 ```
 
+### Linux (Ubuntu/Debian, сервер)
+
+Скачай и запусти:
+
+```bash
+wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh && sudo bash dostup-install.sh
+```
+
 ## Что делает установщик
 
 - Определяет архитектуру системы (Intel/Apple Silicon, amd64/arm64/386)
 - Скачивает последнюю версию ядра Mihomo с GitHub
-- Запрашивает URL подписки (конфига) через GUI-диалог
+- Запрашивает URL подписки (конфига) через GUI-диалог (на Linux — терминал)
 - Скачивает и валидирует конфиг (проверка YAML)
 - Скачивает geo-базы (geoip.dat, geosite.dat)
-- Создаёт ярлык `Dostup_VPN` на рабочем столе
+- Создаёт ярлык `Dostup_VPN` на рабочем столе (на Linux — systemd-сервис + CLI `dostup`)
 - Настраивает брандмауэр (macOS Application Firewall / Windows Firewall)
 - Запускает Mihomo
 
 ## Управление
 
-После установки на рабочем столе появится ярлык **Dostup_VPN**. Запусти его для:
+После установки на рабочем столе появится ярлык **Dostup_VPN** (macOS/Windows) или команда `dostup` (Linux). Запусти для:
 
 - Остановки VPN
 - Перезапуска VPN (с обновлением конфига и ядра)
 - Проверки доступа к заблокированным ресурсам
+
+На Linux используй `sudo dostup start|stop|restart|status|check|log`.
 
 При каждом запуске автоматически проверяются обновления:
 - Ядро Mihomo (при наличии новой версии)
@@ -62,6 +72,11 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 - PowerShell 3.0+ (встроен в Windows)
 - Права администратора
 
+### Linux
+- Ubuntu / Debian (headless сервер)
+- Архитектура amd64 или arm64
+- Права root
+
 ## Структура файлов
 
 После установки создаётся папка:
@@ -69,6 +84,7 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 ```
 ~/dostup/                    # macOS: /Users/username/dostup/
 %USERPROFILE%\dostup\        # Windows: C:\Users\username\dostup\
+/opt/dostup/                 # Linux
 
 ├── mihomo                   # Ядро (mihomo.exe на Windows)
 ├── config.yaml              # Конфиг из подписки
@@ -80,6 +96,10 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 ├── Dostup_VPN.ps1           # Скрипт управления (Windows)
 └── logs/
     └── mihomo.log           # Логи
+
+# Linux дополнительно:
+/etc/systemd/system/dostup.service   # systemd-сервис
+/usr/local/bin/dostup                # CLI-обёртка
 ```
 
 ## Проверка доступа
@@ -115,6 +135,11 @@ rm -rf ~/Desktop/Dostup_VPN.app
 Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force "$env:USERPROFILE\dostup"
 Remove-Item "$env:USERPROFILE\Desktop\Dostup_VPN.lnk"
+```
+
+### Linux
+```bash
+sudo dostup uninstall
 ```
 
 ## Лицензия
