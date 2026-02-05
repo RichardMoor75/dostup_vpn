@@ -135,7 +135,7 @@ download_with_retry() {
     local retry=0
 
     while [[ $retry -lt $max_retries ]]; do
-        if curl -fL -s -o "$output" "$url" 2>/dev/null; then
+        if curl -fL --connect-timeout 10 --max-time 120 -s -o "$output" "$url" 2>/dev/null; then
             if [[ -s "$output" ]]; then
                 return 0
             fi
@@ -494,7 +494,7 @@ download_with_retry() {
     local output="$2"
     local retry=0
     while [[ $retry -lt 3 ]]; do
-        if curl -fL -s -o "$output" "$url" 2>/dev/null && [[ -s "$output" ]]; then
+        if curl -fL --connect-timeout 10 --max-time 120 -s -o "$output" "$url" 2>/dev/null && [[ -s "$output" ]]; then
             return 0
         fi
         retry=$((retry + 1))

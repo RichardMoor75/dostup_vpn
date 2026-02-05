@@ -208,7 +208,7 @@ download_with_retry() {
     local retry=0
 
     while [[ $retry -lt $max_retries ]]; do
-        if curl -fL -# -o "$output" "$url" 2>/dev/null; then
+        if curl -fL --connect-timeout 10 --max-time 120 -# -o "$output" "$url" 2>/dev/null; then
             return 0
         fi
         retry=$((retry + 1))
@@ -391,7 +391,7 @@ download_with_retry() {
     local output="$2"
     local retry=0
     while [[ $retry -lt 3 ]]; do
-        if curl -fL -# -o "$output" "$url" 2>/dev/null; then
+        if curl -fL --connect-timeout 10 --max-time 120 -# -o "$output" "$url" 2>/dev/null; then
             return 0
         fi
         retry=$((retry + 1))
@@ -555,7 +555,7 @@ do_start() {
     # Запускаем
     sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' >> '$DOSTUP_DIR/logs/mihomo.log' 2>&1 &"
 
-    sleep 2
+    sleep 4
 
     if pgrep -x "mihomo" > /dev/null; then
         echo ""
@@ -740,7 +740,7 @@ start_mihomo() {
     # Запускаем полностью отвязанным от терминала
     sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' >> '$LOGS_DIR/mihomo.log' 2>&1 &"
 
-    sleep 2
+    sleep 4
 
     if pgrep -x "mihomo" > /dev/null; then
         return 0
