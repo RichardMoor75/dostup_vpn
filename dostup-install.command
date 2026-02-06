@@ -159,13 +159,11 @@ ask_input() {
     safe_default="${safe_default//\"/\\\"}"
 
     # Пробуем osascript (GUI диалог)
-    result=$(osascript -e "set result to text returned of (display dialog \"$safe_prompt\" default answer \"$safe_default\" buttons {\"OK\"} default button 1)" 2>/dev/null)
-    local osascript_exit=$?
-
-    # Если osascript не сработал (ошибка GUI) - используем терминал
-    if [[ $osascript_exit -ne 0 ]]; then
+    # Важно: при set -e ошибка osascript в if не прерывает скрипт,
+    # поэтому fallback на терминал реально сработает.
+    if ! result=$(osascript -e "set result to text returned of (display dialog \"$safe_prompt\" default answer \"$safe_default\" buttons {\"OK\"} default button 1)" 2>/dev/null); then
         echo ""
-        read -p "$prompt " result < /dev/tty
+        read -r -p "$prompt " result < /dev/tty
     fi
 
     echo "$result"
@@ -401,6 +399,24 @@ download_with_retry() {
     return 1
 }
 
+verify_mihomo_checksum() {
+    local version="$1"
+    local filename="$2"
+    local archive="$3"
+    local checksum_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}.sha256"
+    local expected_hash
+    expected_hash=$(curl -sL --fail "$checksum_url" 2>/dev/null | awk '{print $1}')
+
+    if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ ]]; then
+        local actual_hash
+        actual_hash=$(shasum -a 256 "$archive" | awk '{print $1}')
+        [[ "$expected_hash" == "$actual_hash" ]]
+    else
+        echo -e "${BLUE}ℹ SHA256 не найден, пропуск проверки${NC}"
+        return 0
+    fi
+}
+
 validate_yaml() {
     local content=$(head -c 1000 "$1" 2>/dev/null)
     ! echo "$content" | grep -qiE '<!DOCTYPE|<html|<head' && echo "$content" | grep -qE '^[a-zA-Z_-]+:|^\s*-\s+'
@@ -471,11 +487,16 @@ do_start() {
         download_url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/${filename}"
 
         if download_with_retry "$download_url" "$DOSTUP_DIR/mihomo.gz"; then
-            gunzip -f "$DOSTUP_DIR/mihomo.gz"
-            chmod +x "$MIHOMO_BIN"
-            xattr -d com.apple.quarantine "$MIHOMO_BIN" 2>/dev/null || true
-            update_settings "installed_version" "$latest_version"
-            echo -e "${GREEN}✓ Ядро обновлено${NC}"
+            if verify_mihomo_checksum "$latest_version" "$filename" "$DOSTUP_DIR/mihomo.gz"; then
+                gunzip -f "$DOSTUP_DIR/mihomo.gz"
+                chmod +x "$MIHOMO_BIN"
+                xattr -d com.apple.quarantine "$MIHOMO_BIN" 2>/dev/null || true
+                update_settings "installed_version" "$latest_version"
+                echo -e "${GREEN}✓ Ядро обновлено${NC}"
+            else
+                rm -f "$DOSTUP_DIR/mihomo.gz"
+                echo -e "${RED}✗ Ошибка проверки хэша, используем текущую версию${NC}"
+            fi
         else
             echo -e "${RED}✗ Не удалось обновить ядро, используем текущую версию${NC}"
         fi
@@ -553,7 +574,7 @@ do_start() {
     : > "$DOSTUP_DIR/logs/mihomo.log"
 
     # Запускаем
-    sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' >> '$DOSTUP_DIR/logs/mihomo.log' 2>&1 &"
+    sudo nohup "$MIHOMO_BIN" -d "$DOSTUP_DIR" >> "$DOSTUP_DIR/logs/mihomo.log" 2>&1 &
 
     sleep 4
 
@@ -738,7 +759,7 @@ start_mihomo() {
     : > "$LOGS_DIR/mihomo.log"
 
     # Запускаем полностью отвязанным от терминала
-    sudo sh -c "nohup '$MIHOMO_BIN' -d '$DOSTUP_DIR' >> '$LOGS_DIR/mihomo.log' 2>&1 &"
+    sudo nohup "$MIHOMO_BIN" -d "$DOSTUP_DIR" >> "$LOGS_DIR/mihomo.log" 2>&1 &
 
     sleep 4
 

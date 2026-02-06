@@ -504,6 +504,24 @@ download_with_retry() {
     return 1
 }
 
+verify_mihomo_checksum() {
+    local version="$1"
+    local filename="$2"
+    local archive="$3"
+    local checksum_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}.sha256"
+    local expected_hash
+    expected_hash=$(curl -sL --fail "$checksum_url" 2>/dev/null | awk '{print $1}')
+
+    if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ ]]; then
+        local actual_hash
+        actual_hash=$(sha256sum "$archive" | awk '{print $1}')
+        [[ "$expected_hash" == "$actual_hash" ]]
+    else
+        print_info "SHA256 не найден, пропуск проверки"
+        return 0
+    fi
+}
+
 validate_yaml() {
     local content
     content=$(head -c 1000 "$1" 2>/dev/null)
@@ -603,11 +621,16 @@ do_update() {
         local url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/${filename}"
 
         if download_with_retry "$url" "$DOSTUP_DIR/mihomo.gz"; then
-            systemctl stop dostup 2>/dev/null || true
-            gunzip -f "$DOSTUP_DIR/mihomo.gz"
-            chmod +x "$MIHOMO_BIN"
-            update_settings "installed_version" "$latest_version"
-            print_success "Ядро обновлено до $latest_version"
+            if verify_mihomo_checksum "$latest_version" "$filename" "$DOSTUP_DIR/mihomo.gz"; then
+                systemctl stop dostup 2>/dev/null || true
+                gunzip -f "$DOSTUP_DIR/mihomo.gz"
+                chmod +x "$MIHOMO_BIN"
+                update_settings "installed_version" "$latest_version"
+                print_success "Ядро обновлено до $latest_version"
+            else
+                rm -f "$DOSTUP_DIR/mihomo.gz"
+                print_error "Ошибка проверки хэша! Используем текущую версию"
+            fi
         else
             print_error "Не удалось обновить ядро, используем текущую версию"
         fi
@@ -876,7 +899,7 @@ check_internet
 OLD_SUB_URL=""
 if [[ -f "$SETTINGS_FILE" ]]; then
     if command -v jq &>/dev/null; then
-        OLD_SUB_URL=$(jq -r '.subscription_url // ""' "$SETTINGS_FILE" 2>/dev/null)
+        OLD_SUB_URL=$(jq -r '.subscription_url // ""' "$SETTINGS_FILE" 2>/dev/null || true)
     else
         OLD_SUB_URL=$(grep -oP '"subscription_url"\s*:\s*"\K[^"]+' "$SETTINGS_FILE" 2>/dev/null || true)
     fi

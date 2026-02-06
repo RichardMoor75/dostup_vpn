@@ -425,6 +425,37 @@ function Expand-ZipFile($zipPath, $destPath) {
     }
 }
 
+function Get-FileSHA256($path) {
+    if ($PSVersionTable.PSVersion.Major -ge 4) {
+        return (Get-FileHash -Path $path -Algorithm SHA256).Hash
+    } else {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $stream = [System.IO.File]::OpenRead($path)
+        try {
+            $hash = $sha256.ComputeHash($stream)
+            return [BitConverter]::ToString($hash) -replace '-', ''
+        } finally {
+            $stream.Close()
+        }
+    }
+}
+
+function Test-MihomoChecksum($version, $filename, $archivePath) {
+    $checksumUrl = "https://github.com/MetaCubeX/mihomo/releases/download/$version/$filename.sha256"
+    try {
+        $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0]
+        if ($expectedHash -match '^[a-fA-F0-9]{64}$') {
+            $actualHash = Get-FileSHA256 $archivePath
+            return ($expectedHash.ToUpper() -eq $actualHash.ToUpper())
+        }
+        Write-Info 'SHA256 не найден, пропуск проверки'
+        return $true
+    } catch {
+        Write-Info 'SHA256 не найден, пропуск проверки'
+        return $true
+    }
+}
+
 function Get-ProxyPort {
     $port = 2080
     if (Test-Path $CONFIG_FILE) {
@@ -555,16 +586,21 @@ function Start-Mihomo {
             }
             $url = "https://github.com/MetaCubeX/mihomo/releases/download/$latest/$fn"
             if (Invoke-DownloadWithRetry $url "$DOSTUP_DIR\m.zip") {
-                Expand-ZipFile "$DOSTUP_DIR\m.zip" $DOSTUP_DIR
-                Remove-Item "$DOSTUP_DIR\m.zip" -Force
-                $exe = Get-ChildItem -Path $DOSTUP_DIR -Filter 'mihomo*.exe' | Select-Object -First 1
-                if ($exe -and $exe.Name -ne 'mihomo.exe') {
-                    Remove-Item $MIHOMO_BIN -Force -ErrorAction SilentlyContinue
-                    Rename-Item -Path $exe.FullName -NewName 'mihomo.exe' -Force
+                if (Test-MihomoChecksum $latest $fn "$DOSTUP_DIR\m.zip") {
+                    Expand-ZipFile "$DOSTUP_DIR\m.zip" $DOSTUP_DIR
+                    Remove-Item "$DOSTUP_DIR\m.zip" -Force
+                    $exe = Get-ChildItem -Path $DOSTUP_DIR -Filter 'mihomo*.exe' | Select-Object -First 1
+                    if ($exe -and $exe.Name -ne 'mihomo.exe') {
+                        Remove-Item $MIHOMO_BIN -Force -ErrorAction SilentlyContinue
+                        Rename-Item -Path $exe.FullName -NewName 'mihomo.exe' -Force
+                    }
+                    $settings.installed_version = $latest
+                    Save-Settings $settings
+                    Write-OK 'Ядро обновлено'
+                } else {
+                    Remove-Item "$DOSTUP_DIR\m.zip" -Force -ErrorAction SilentlyContinue
+                    Write-Fail 'Ошибка проверки хэша, используем текущую версию'
                 }
-                $settings.installed_version = $latest
-                Save-Settings $settings
-                Write-OK 'Ядро обновлено'
             } else { Write-Fail 'Не удалось обновить, используем текущую версию' }
         } else { Write-OK 'Ядро актуально' }
     } catch { Write-OK 'Ядро актуально' }
