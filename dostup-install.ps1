@@ -44,6 +44,80 @@ function Test-ValidYaml($path) {
     }
 }
 
+function Get-MixedPort {
+    $port = 2080
+    if (Test-Path $CONFIG_FILE) {
+        try {
+            $cfg = Get-Content $CONFIG_FILE -Raw
+            if ($cfg -match 'mixed-port:\s*(\d+)') {
+                $port = [int]$matches[1]
+            }
+        } catch { }
+    }
+    return $port
+}
+
+function Test-LocalPortListening($port) {
+    try {
+        $lines = netstat -ano -p tcp 2>$null
+        foreach ($line in $lines) {
+            $parts = ($line -replace '^\s+', '') -split '\s+'
+            if ($parts.Length -lt 2) { continue }
+            $localAddress = $parts[1]
+            if ($localAddress -match ':(\d+)$' -and [int]$matches[1] -eq $port) {
+                return $true
+            }
+        }
+    } catch { }
+    return $false
+}
+
+function Wait-MihomoStart($timeoutSec = 5) {
+    $proxyPort = Get-MixedPort
+    for ($i = 0; $i -lt $timeoutSec; $i++) {
+        if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+            return $true
+        }
+        if (Test-LocalPortListening $proxyPort) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+        return $true
+    }
+    return (Test-LocalPortListening $proxyPort)
+}
+
+function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
+    if (-not (Get-Command Start-Job -ErrorAction SilentlyContinue)) {
+        return $null
+    }
+    try {
+        return Start-Job -ScriptBlock {
+            param($url, $output, $maxRetries)
+            $ErrorActionPreference = 'Stop'
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $retry = 0
+            while ($retry -lt $maxRetries) {
+                try {
+                    Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+                    if ((Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                        return $true
+                    }
+                } catch { }
+                $retry++
+                if ($retry -lt $maxRetries) {
+                    Start-Sleep -Seconds 2
+                }
+            }
+            return $false
+        } -ArgumentList $url, $output, $maxRetries
+    } catch {
+        return $null
+    }
+}
+
 function Invoke-DownloadWithRetry($url, $output, $maxRetries = 3) {
     $retry = 0
     while ($retry -lt $maxRetries) {
@@ -318,18 +392,52 @@ if ($osVersion.Major -lt 10) {
     Write-OK 'TUN removed, using system proxy mode'
 }
 
-Write-Step 'Downloading geo databases...'
+Write-Step 'Downloading geo databases and icon...'
 $geoSuccess = $true
-if (-not (Invoke-DownloadWithRetry $GEOIP_URL "$DOSTUP_DIR\geoip.dat")) {
-    Write-Fail 'Failed to download geoip.dat'
-    $geoSuccess = $false
+$iconPath = "$DOSTUP_DIR\icon.ico"
+$parallelAvailable = ($null -ne (Get-Command Start-Job -ErrorAction SilentlyContinue))
+
+if ($parallelAvailable) {
+    $geoIpJob = Invoke-DownloadWithRetryJob $GEOIP_URL "$DOSTUP_DIR\geoip.dat"
+    $geoSiteJob = Invoke-DownloadWithRetryJob $GEOSITE_URL "$DOSTUP_DIR\geosite.dat"
+    $iconJob = Invoke-DownloadWithRetryJob $ICON_URL $iconPath
+
+    if ($geoIpJob -and $geoSiteJob -and $iconJob) {
+        Wait-Job -Job @($geoIpJob, $geoSiteJob, $iconJob) | Out-Null
+        $geoIpOk = [bool](Receive-Job $geoIpJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
+        $geoSiteOk = [bool](Receive-Job $geoSiteJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
+        $iconOk = [bool](Receive-Job $iconJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
+        Remove-Job -Job @($geoIpJob, $geoSiteJob, $iconJob) -Force -ErrorAction SilentlyContinue
+
+        if (-not $geoIpOk) { Write-Fail 'Failed to download geoip.dat'; $geoSuccess = $false }
+        if (-not $geoSiteOk) { Write-Fail 'Failed to download geosite.dat'; $geoSuccess = $false }
+        if ($geoSuccess) { Write-OK 'Geo databases downloaded' }
+        if ($iconOk) { Write-OK 'Icon downloaded' } else { Write-Fail 'Icon download failed (shortcut will use default icon)' }
+    } else {
+        if ($geoIpJob) { Remove-Job $geoIpJob -Force -ErrorAction SilentlyContinue }
+        if ($geoSiteJob) { Remove-Job $geoSiteJob -Force -ErrorAction SilentlyContinue }
+        if ($iconJob) { Remove-Job $iconJob -Force -ErrorAction SilentlyContinue }
+        $parallelAvailable = $false
+    }
 }
-if (-not (Invoke-DownloadWithRetry $GEOSITE_URL "$DOSTUP_DIR\geosite.dat")) {
-    Write-Fail 'Failed to download geosite.dat'
-    $geoSuccess = $false
-}
-if ($geoSuccess) {
-    Write-OK 'Geo databases downloaded'
+
+if (-not $parallelAvailable) {
+    if (-not (Invoke-DownloadWithRetry $GEOIP_URL "$DOSTUP_DIR\geoip.dat")) {
+        Write-Fail 'Failed to download geoip.dat'
+        $geoSuccess = $false
+    }
+    if (-not (Invoke-DownloadWithRetry $GEOSITE_URL "$DOSTUP_DIR\geosite.dat")) {
+        Write-Fail 'Failed to download geosite.dat'
+        $geoSuccess = $false
+    }
+    if ($geoSuccess) {
+        Write-OK 'Geo databases downloaded'
+    }
+    if (Invoke-DownloadWithRetry $ICON_URL $iconPath) {
+        Write-OK 'Icon downloaded'
+    } else {
+        Write-Fail 'Icon download failed (shortcut will use default icon)'
+    }
 }
 
 $settings = @{
@@ -463,6 +571,38 @@ function Get-ProxyPort {
         if ($cfg -match 'mixed-port:\s*(\d+)') { $port = $matches[1] }
     }
     return $port
+}
+
+function Test-LocalPortListening($port) {
+    try {
+        $lines = netstat -ano -p tcp 2>$null
+        foreach ($line in $lines) {
+            $parts = ($line -replace '^\s+', '') -split '\s+'
+            if ($parts.Length -lt 2) { continue }
+            $localAddress = $parts[1]
+            if ($localAddress -match ':(\d+)$' -and [int]$matches[1] -eq $port) {
+                return $true
+            }
+        }
+    } catch { }
+    return $false
+}
+
+function Wait-MihomoStart($timeoutSec = 5) {
+    $proxyPort = Get-ProxyPort
+    for ($i = 0; $i -lt $timeoutSec; $i++) {
+        if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+            return $true
+        }
+        if (Test-LocalPortListening $proxyPort) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+        return $true
+    }
+    return (Test-LocalPortListening $proxyPort)
 }
 
 function Enable-SystemProxy {
@@ -653,10 +793,7 @@ function Start-Mihomo {
     Write-Step 'Запуск Mihomo...'
     Write-Host ''
     Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
-    Start-Sleep -Seconds 3
-
-    $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-    if ($proc) {
+    if (Wait-MihomoStart 5) {
         Enable-SystemProxy
         Write-Host ''
         Write-Host '============================================' -ForegroundColor Green
@@ -737,14 +874,6 @@ Remove-Item "$DOSTUP_DIR\dostup-stop.ps1" -Force -ErrorAction SilentlyContinue
 
 Write-OK 'Control script created'
 
-Write-Step 'Downloading icon...'
-$iconPath = "$DOSTUP_DIR\icon.ico"
-if (Invoke-DownloadWithRetry $ICON_URL $iconPath) {
-    Write-OK 'Icon downloaded'
-} else {
-    Write-Fail 'Icon download failed (shortcut will use default icon)'
-}
-
 Write-Step 'Creating desktop shortcut...'
 $WshShell = New-Object -ComObject WScript.Shell
 
@@ -783,10 +912,7 @@ try {
 Write-Step 'Starting Mihomo...'
 Write-Host ''
 Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
-Start-Sleep -Seconds 3
-
-$process = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-if ($process) {
+if (Wait-MihomoStart 5) {
     # Enable system proxy for Windows < 10
     $osVersion = [Environment]::OSVersion.Version
     if ($osVersion.Major -lt 10) {

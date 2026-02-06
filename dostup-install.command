@@ -315,22 +315,46 @@ EOF
 download_geo() {
     print_step "Скачивание geo-баз..."
 
-    local success=true
+    local geoip_ok=true
+    local geosite_ok=true
 
-    if ! download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat"; then
+    download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat" &
+    local geoip_pid=$!
+    download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat" &
+    local geosite_pid=$!
+
+    if ! wait "$geoip_pid"; then
         print_error "Не удалось скачать geoip.dat"
-        success=false
+        geoip_ok=false
     fi
 
-    if ! download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat"; then
+    if ! wait "$geosite_pid"; then
         print_error "Не удалось скачать geosite.dat"
-        success=false
+        geosite_ok=false
     fi
 
-    if $success; then
+    if $geoip_ok && $geosite_ok; then
         update_settings "last_geo_update" "$(date +%Y-%m-%d)"
         print_success "Geo-базы скачаны"
+    else
+        print_warning "Geo-базы скачаны не полностью"
     fi
+
+    return 0
+}
+
+# Скачивание geo-баз и иконки (параллельно для ускорения установки)
+download_assets_parallel() {
+    print_step "Параллельное скачивание geo-баз и иконки..."
+    download_geo &
+    local geo_pid=$!
+    download_icon &
+    local icon_pid=$!
+
+    wait "$geo_pid" || true
+    wait "$icon_pid" || true
+
+    return 0
 }
 
 # Создание скрипта управления (единый start/stop)
@@ -893,14 +917,11 @@ if ! download_config "$SUB_URL"; then
     exit 1
 fi
 
-# Скачивание geo-баз
-download_geo
+# Скачивание geo-баз и иконки
+download_assets_parallel
 
 # Создание sites.json
 create_sites_json
-
-# Скачивание иконки
-download_icon
 
 # Создание скрипта управления
 print_step "Создание скрипта управления..."
