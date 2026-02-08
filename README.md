@@ -37,6 +37,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Скачивает geo-базы (geoip.dat, geosite.dat)
 - Создаёт ярлык `Dostup_VPN` на рабочем столе (на Linux — systemd-сервис + CLI `dostup`)
 - Настраивает брандмауэр (macOS Application Firewall / Windows Firewall)
+- Переключает системный DNS на Mihomo для защиты от DNS-утечки (macOS)
 - Запускает Mihomo
 
 ## Управление
@@ -92,6 +93,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ├── geosite.dat              # База доменов
 ├── settings.json            # Настройки (URL подписки, версия)
 ├── sites.json               # Список сайтов для проверки доступа
+├── original_dns.conf        # Сохранённый DNS (создаётся при запуске, удаляется при остановке)
 ├── Dostup_VPN.command       # Скрипт управления (macOS)
 ├── Dostup_VPN.ps1           # Скрипт управления (Windows)
 └── logs/
@@ -125,6 +127,9 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 ### macOS
 ```bash
+# Восстановить DNS (если mihomo запущен)
+IFACE=$(route get default 2>/dev/null | awk '/interface:/{print $2}')
+sudo networksetup -setdnsservers "$(networksetup -listallhardwareports | grep -B1 "Device: $IFACE" | head -1 | sed 's/Hardware Port: //')" empty
 sudo pkill mihomo
 rm -rf ~/dostup
 rm -rf ~/Desktop/Dostup_VPN.app
