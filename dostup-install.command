@@ -446,6 +446,91 @@ validate_yaml() {
     ! echo "$content" | grep -qiE '<!DOCTYPE|<html|<head' && echo "$content" | grep -qE '^[a-zA-Z_-]+:|^\s*-\s+'
 }
 
+# --- DNS-функции ---
+
+DNS_CONF="$DOSTUP_DIR/original_dns.conf"
+
+get_active_network_service() {
+    # Определяем активный сетевой интерфейс через default route
+    local device
+    device=$(route get default 2>/dev/null | awk '/interface:/{print $2}')
+    if [[ -z "$device" ]]; then
+        return 1
+    fi
+    # Маппим device (en0, en1...) на имя сервиса (Wi-Fi, Ethernet...)
+    local service=""
+    while IFS= read -r line; do
+        if [[ "$line" == *"Device: $device"* ]]; then
+            echo "$service"
+            return 0
+        fi
+        if [[ "$line" == "Hardware Port:"* ]]; then
+            service=$(echo "$line" | sed 's/Hardware Port: //')
+        fi
+    done < <(networksetup -listallhardwareports 2>/dev/null)
+    return 1
+}
+
+save_and_set_mihomo_dns() {
+    local service
+    service=$(get_active_network_service)
+    if [[ -z "$service" ]]; then
+        echo -e "${YELLOW}⚠ Не удалось определить сетевой интерфейс, DNS не переключён${NC}"
+        return 0
+    fi
+
+    # Сохраняем текущие DNS-серверы
+    local current_dns
+    current_dns=$(networksetup -getdnsservers "$service" 2>/dev/null)
+
+    echo "$service" > "$DNS_CONF"
+    if echo "$current_dns" | grep -q "There aren't any DNS Servers"; then
+        echo "empty" >> "$DNS_CONF"
+    else
+        echo "$current_dns" >> "$DNS_CONF"
+    fi
+
+    # Устанавливаем DNS на mihomo fake-ip
+    sudo networksetup -setdnsservers "$service" 198.18.0.1
+    echo -e "${GREEN}✓ DNS переключён на Mihomo (198.18.0.1)${NC}"
+}
+
+restore_original_dns() {
+    if [[ ! -f "$DNS_CONF" ]]; then
+        return 0
+    fi
+
+    local service
+    service=$(head -1 "$DNS_CONF")
+    if [[ -z "$service" ]]; then
+        rm -f "$DNS_CONF"
+        return 0
+    fi
+
+    # Читаем сохранённые DNS-серверы (все строки кроме первой)
+    local dns_servers
+    dns_servers=$(tail -n +2 "$DNS_CONF")
+
+    if [[ "$dns_servers" == "empty" ]]; then
+        sudo networksetup -setdnsservers "$service" empty
+    else
+        # Передаём все серверы через пробел
+        sudo networksetup -setdnsservers "$service" $dns_servers
+    fi
+
+    rm -f "$DNS_CONF"
+    echo -e "${GREEN}✓ DNS восстановлен${NC}"
+}
+
+check_dns_recovery() {
+    # Защита от крэша: если mihomo не работает, а DNS-файл остался — восстановить
+    if [[ -f "$DNS_CONF" ]] && ! pgrep -x "mihomo" > /dev/null; then
+        echo -e "${YELLOW}⚠ Обнаружен незавершённый DNS-фикс, восстанавливаю...${NC}"
+        sudo -v 2>/dev/null || true
+        restore_original_dns
+    fi
+}
+
 do_check_access() {
     echo ""
     echo -e "${YELLOW}▶ Проверка доступа к ресурсам...${NC}"
@@ -480,6 +565,8 @@ do_check_access() {
 do_stop() {
     echo -e "${YELLOW}▶ Остановка Mihomo (требуется пароль администратора)...${NC}"
     echo ""
+    sudo -v
+    restore_original_dns
     sudo pkill -9 mihomo 2>/dev/null || true
     # Ожидание с timeout
     stop_timeout=10
@@ -603,6 +690,7 @@ do_start() {
     sleep 4
 
     if pgrep -x "mihomo" > /dev/null; then
+        save_and_set_mihomo_dns
         echo ""
         echo -e "${GREEN}============================================${NC}"
         echo -e "${GREEN}✓ Mihomo успешно запущен!${NC}"
@@ -619,6 +707,8 @@ do_start() {
 }
 
 # === MAIN ===
+
+check_dns_recovery
 
 echo ""
 echo -e "${BLUE}=== Dostup VPN ===${NC}"
@@ -764,6 +854,76 @@ LAUNCHER
     print_success "Приложение Dostup_VPN создано на рабочем столе"
 }
 
+# --- DNS-функции (installer) ---
+
+DNS_CONF_INSTALLER="$DOSTUP_DIR/original_dns.conf"
+
+get_active_network_service_installer() {
+    local device
+    device=$(route get default 2>/dev/null | awk '/interface:/{print $2}')
+    if [[ -z "$device" ]]; then
+        return 1
+    fi
+    local service=""
+    while IFS= read -r line; do
+        if [[ "$line" == *"Device: $device"* ]]; then
+            echo "$service"
+            return 0
+        fi
+        if [[ "$line" == "Hardware Port:"* ]]; then
+            service=$(echo "$line" | sed 's/Hardware Port: //')
+        fi
+    done < <(networksetup -listallhardwareports 2>/dev/null)
+    return 1
+}
+
+save_and_set_mihomo_dns_installer() {
+    local service
+    service=$(get_active_network_service_installer)
+    if [[ -z "$service" ]]; then
+        print_warning "Не удалось определить сетевой интерфейс, DNS не переключён"
+        return 0
+    fi
+
+    local current_dns
+    current_dns=$(networksetup -getdnsservers "$service" 2>/dev/null)
+
+    echo "$service" > "$DNS_CONF_INSTALLER"
+    if echo "$current_dns" | grep -q "There aren't any DNS Servers"; then
+        echo "empty" >> "$DNS_CONF_INSTALLER"
+    else
+        echo "$current_dns" >> "$DNS_CONF_INSTALLER"
+    fi
+
+    sudo networksetup -setdnsservers "$service" 198.18.0.1
+    print_success "DNS переключён на Mihomo (198.18.0.1)"
+}
+
+restore_original_dns_installer() {
+    if [[ ! -f "$DNS_CONF_INSTALLER" ]]; then
+        return 0
+    fi
+
+    local service
+    service=$(head -1 "$DNS_CONF_INSTALLER")
+    if [[ -z "$service" ]]; then
+        rm -f "$DNS_CONF_INSTALLER"
+        return 0
+    fi
+
+    local dns_servers
+    dns_servers=$(tail -n +2 "$DNS_CONF_INSTALLER")
+
+    if [[ "$dns_servers" == "empty" ]]; then
+        sudo networksetup -setdnsservers "$service" empty
+    else
+        sudo networksetup -setdnsservers "$service" $dns_servers
+    fi
+
+    rm -f "$DNS_CONF_INSTALLER"
+    print_success "DNS восстановлен"
+}
+
 # Запуск mihomo
 start_mihomo() {
     print_step "Запуск Mihomo (требуется пароль администратора)..."
@@ -828,6 +988,7 @@ fi
 # Остановка mihomo если запущен
 if pgrep -x "mihomo" > /dev/null; then
     print_step "Остановка запущенного Mihomo..."
+    restore_original_dns_installer
     sudo pkill -9 mihomo 2>/dev/null || true
     # Ожидание с timeout вместо фиксированного sleep
     stop_timeout=10
@@ -934,6 +1095,7 @@ create_desktop_shortcuts
 # Первый запуск
 echo ""
 if start_mihomo; then
+    save_and_set_mihomo_dns_installer
     echo ""
     echo -e "${GREEN}============================================${NC}"
     echo -e "${GREEN}    Установка завершена успешно!${NC}"
