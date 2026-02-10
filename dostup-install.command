@@ -230,35 +230,52 @@ restore_config() {
     fi
 }
 
-# Обновление settings.json
+# Обновление settings.json (чистый bash, без python3)
 update_settings() {
     local key="$1"
     local value="$2"
 
-    if [[ ! -f "$SETTINGS_FILE" ]]; then
-        echo '{}' > "$SETTINGS_FILE"
+    if [[ ! -f "$SETTINGS_FILE" ]] || [[ ! -s "$SETTINGS_FILE" ]]; then
+        printf '{\n  "%s": "%s"\n}\n' "$key" "$value" > "$SETTINGS_FILE"
+        return
     fi
 
-    # Используем Python для JSON (есть на всех Mac)
-    # Передаём значения через env variables для безопасности
-    SETTINGS_FILE="$SETTINGS_FILE" KEY="$key" VALUE="$value" python3 << 'EOF'
-import json, os
-settings_file = os.environ['SETTINGS_FILE']
-key = os.environ['KEY']
-value = os.environ['VALUE']
-with open(settings_file, "r") as f:
-    data = json.load(f)
-data[key] = value
-with open(settings_file, "w") as f:
-    json.dump(data, f, indent=2)
-EOF
+    if grep -q "\"${key}\"" "$SETTINGS_FILE" 2>/dev/null; then
+        # Ключ существует — заменяем значение (awk безопасен со спецсимволами)
+        key="$key" val="$value" awk '{
+            k = ENVIRON["key"]; v = ENVIRON["val"]
+            if (index($0, "\"" k "\"")) {
+                match($0, /^[[:space:]]*/); ws = substr($0, 1, RLENGTH)
+                comma = ""; if (sub(/,[[:space:]]*$/, "")) comma = ","
+                print ws "\"" k "\": \"" v "\"" comma
+            } else { print }
+        }' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+    else
+        # Ключ не существует — добавляем перед закрывающей }
+        if ! grep -qE '"[^"]*":' "$SETTINGS_FILE"; then
+            printf '{\n  "%s": "%s"\n}\n' "$key" "$value" > "$SETTINGS_FILE"
+        else
+            key="$key" val="$value" awk '{
+                k = ENVIRON["key"]; v = ENVIRON["val"]
+                if (/^[[:space:]]*}[[:space:]]*$/) {
+                    if (prev != "" && prev !~ /,$/ && prev ~ /"/) sub(/$/, ",", prev)
+                    if (prev != "") print prev
+                    printf "  \"%s\": \"%s\"\n}\n", k, v
+                    prev = ""; next
+                } else {
+                    if (prev != "") print prev
+                    prev = $0
+                }
+            } END { if (prev != "") print prev }' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+        fi
+    fi
 }
 
-# Чтение из settings.json
+# Чтение из settings.json (чистый bash, без python3)
 read_settings() {
     local key="$1"
     if [[ -f "$SETTINGS_FILE" ]]; then
-        SETTINGS_FILE="$SETTINGS_FILE" KEY="$key" python3 -c "import json, os; print(json.load(open(os.environ['SETTINGS_FILE'])).get(os.environ['KEY'], ''))" 2>/dev/null
+        sed -n 's/.*"'"$key"'": *"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null
     fi
 }
 
@@ -384,24 +401,44 @@ SITES_FILE="$DOSTUP_DIR/sites.json"
 read_settings() {
     local key="$1"
     if [[ -f "$SETTINGS_FILE" ]]; then
-        SETTINGS_FILE="$SETTINGS_FILE" KEY="$key" python3 -c "import json, os; print(json.load(open(os.environ['SETTINGS_FILE'])).get(os.environ['KEY'], ''))" 2>/dev/null
+        sed -n 's/.*"'"$key"'": *"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null
     fi
 }
 
 update_settings() {
     local key="$1"
     local value="$2"
-    SETTINGS_FILE="$SETTINGS_FILE" KEY="$key" VALUE="$value" python3 << 'EOF'
-import json, os
-settings_file = os.environ['SETTINGS_FILE']
-key = os.environ['KEY']
-value = os.environ['VALUE']
-with open(settings_file, "r") as f:
-    data = json.load(f)
-data[key] = value
-with open(settings_file, "w") as f:
-    json.dump(data, f, indent=2)
-EOF
+    if [[ ! -f "$SETTINGS_FILE" ]] || [[ ! -s "$SETTINGS_FILE" ]]; then
+        printf '{\n  "%s": "%s"\n}\n' "$key" "$value" > "$SETTINGS_FILE"
+        return
+    fi
+    if grep -q "\"${key}\"" "$SETTINGS_FILE" 2>/dev/null; then
+        key="$key" val="$value" awk '{
+            k = ENVIRON["key"]; v = ENVIRON["val"]
+            if (index($0, "\"" k "\"")) {
+                match($0, /^[[:space:]]*/); ws = substr($0, 1, RLENGTH)
+                comma = ""; if (sub(/,[[:space:]]*$/, "")) comma = ","
+                print ws "\"" k "\": \"" v "\"" comma
+            } else { print }
+        }' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+    else
+        if ! grep -qE '"[^"]*":' "$SETTINGS_FILE"; then
+            printf '{\n  "%s": "%s"\n}\n' "$key" "$value" > "$SETTINGS_FILE"
+        else
+            key="$key" val="$value" awk '{
+                k = ENVIRON["key"]; v = ENVIRON["val"]
+                if (/^[[:space:]]*}[[:space:]]*$/) {
+                    if (prev != "" && prev !~ /,$/ && prev ~ /"/) sub(/$/, ",", prev)
+                    if (prev != "") print prev
+                    printf "  \"%s\": \"%s\"\n}\n", k, v
+                    prev = ""; next
+                } else {
+                    if (prev != "") print prev
+                    prev = $0
+                }
+            } END { if (prev != "") print prev }' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+        fi
+    fi
 }
 
 get_latest_version() {
@@ -541,9 +578,9 @@ do_check_access() {
         return 1
     fi
 
-    # Читаем сайты из JSON (безопасно через env variable)
+    # Читаем сайты из JSON (чистый bash, без python3)
     local sites
-    sites=$(SITES_FILE="$SITES_FILE" python3 -c "import json, os; print('\n'.join(json.load(open(os.environ['SITES_FILE']))['sites']))" 2>/dev/null)
+    sites=$(sed -n 's/.*"\([a-zA-Z0-9._-]*\.[a-zA-Z]\{2,\}\)".*/\1/p' "$SITES_FILE" 2>/dev/null)
 
     if [[ -z "$sites" ]]; then
         echo -e "${RED}✗ Не удалось прочитать список сайтов${NC}"
@@ -982,7 +1019,7 @@ check_macos
 # Сохраняем старую подписку если есть (файл может быть с правами root)
 OLD_SUB_URL=""
 if [[ -f "$SETTINGS_FILE" ]]; then
-    OLD_SUB_URL=$(sudo cat "$SETTINGS_FILE" 2>/dev/null | python3 -c "import sys, json; print(json.load(sys.stdin).get('subscription_url', ''))" 2>/dev/null || true)
+    OLD_SUB_URL=$(sudo sed -n 's/.*"subscription_url": *"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null || true)
 fi
 
 # Остановка mihomo если запущен
