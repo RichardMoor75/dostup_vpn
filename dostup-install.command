@@ -387,7 +387,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-DOSTUP_DIR="$HOME/dostup"
+DOSTUP_DIR="$(cd "$(dirname "$0")" && pwd)"
 SETTINGS_FILE="$DOSTUP_DIR/settings.json"
 MIHOMO_BIN="$DOSTUP_DIR/mihomo"
 CONFIG_FILE="$DOSTUP_DIR/config.yaml"
@@ -683,8 +683,7 @@ do_stop() {
     fi
 }
 
-do_start() {
-    # Проверка обновлений ядра
+do_update_core() {
     echo -e "${YELLOW}▶ Проверка обновлений ядра...${NC}"
     current_version=$(read_settings "installed_version")
     latest_version=$(get_latest_version)
@@ -713,8 +712,9 @@ do_start() {
     else
         echo -e "${GREEN}✓ Ядро актуально${NC}"
     fi
+}
 
-    # Скачивание конфига
+do_update_config() {
     echo -e "${YELLOW}▶ Скачивание конфига...${NC}"
     sub_url=$(read_settings "subscription_url")
     if [[ -n "$sub_url" ]]; then
@@ -737,6 +737,30 @@ do_start() {
     else
         echo -e "${RED}✗ URL подписки не задан${NC}"
     fi
+}
+
+do_start_quick() {
+    # Настройка Application Firewall
+    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
+    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
+
+    # Создаём лог-файл от текущего пользователя
+    : > "$DOSTUP_DIR/logs/mihomo.log"
+
+    # Запускаем
+    sudo nohup "$MIHOMO_BIN" -d "$DOSTUP_DIR" >> "$DOSTUP_DIR/logs/mihomo.log" 2>&1 &
+    sleep 4
+
+    if pgrep -x "mihomo" > /dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+do_start() {
+    do_update_core
+    do_update_config
 
     # Обновление geo-баз (раз в 2 недели)
     should_update_geo=false
@@ -805,6 +829,46 @@ do_start() {
 }
 
 # === MAIN ===
+
+# --- CLI mode (вызов из menu bar app) ---
+if [[ -n "$1" ]]; then
+    case "$1" in
+        start)
+            do_start_quick
+            exit $?
+            ;;
+        stop)
+            do_stop
+            exit $?
+            ;;
+        check)
+            do_check_access
+            echo ""
+            read -p "Нажмите Enter для закрытия..." < /dev/tty
+            exit 0
+            ;;
+        update-core)
+            do_update_core
+            echo ""
+            read -p "Нажмите Enter для закрытия..." < /dev/tty
+            exit 0
+            ;;
+        update-config)
+            do_update_config
+            echo ""
+            read -p "Нажмите Enter для закрытия..." < /dev/tty
+            exit 0
+            ;;
+        status)
+            if pgrep -x "mihomo" > /dev/null; then echo "running"; else echo "stopped"; fi
+            exit 0
+            ;;
+        *)
+            echo "Unknown command: $1"
+            exit 1
+            ;;
+    esac
+fi
 
 check_dns_recovery
 
@@ -952,6 +1016,353 @@ LAUNCHER
     print_success "Приложение Dostup_VPN создано на рабочем столе"
 }
 
+# Создание menu bar приложения
+create_statusbar_app() {
+    # Проверяем наличие swiftc
+    if ! command -v swiftc &>/dev/null; then
+        print_info "Xcode CLT не найден — menu bar приложение не установлено"
+        print_info "Для установки menu bar иконки выполните: xcode-select --install"
+        return 0
+    fi
+
+    print_step "Создание menu bar приложения..."
+
+    local statusbar_dir="$DOSTUP_DIR/statusbar"
+    local app_path="$statusbar_dir/DostupVPN-StatusBar.app"
+
+    mkdir -p "$statusbar_dir"
+    mkdir -p "$app_path/Contents/MacOS"
+    mkdir -p "$app_path/Contents/Resources"
+
+    # Нарезаем иконку из icon.icns
+    if [[ -f "$DOSTUP_DIR/icon.icns" ]]; then
+        sips -z 36 36 -s format png "$DOSTUP_DIR/icon.icns" --out "$statusbar_dir/icon_on.png" 2>/dev/null || true
+    fi
+
+    # Записываем Swift-исходник
+    cat > "$statusbar_dir/DostupVPN-StatusBar.swift" << 'SWIFTSOURCE'
+import Cocoa
+
+// MARK: - AppDelegate
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+
+    private var statusItem: NSStatusItem!
+    private var statusMenuItem: NSMenuItem!
+    private var toggleMenuItem: NSMenuItem!
+    private var timer: Timer?
+
+    private var colorIcon: NSImage?
+    private var grayIcon: NSImage?
+
+    private let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
+    private var controlScript: String {
+        return homeDir + "/dostup/Dostup_VPN.command"
+    }
+
+    // MARK: - Application Lifecycle
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        loadIcons()
+        setupStatusItem()
+        setupMenu()
+        startTimer()
+        updateStatus()
+    }
+
+    // MARK: - Icons
+
+    private func loadIcons() {
+        let iconPath = homeDir + "/dostup/statusbar/icon_on.png"
+        if let image = NSImage(contentsOfFile: iconPath) {
+            image.size = NSSize(width: 18, height: 18)
+            image.isTemplate = false
+            colorIcon = image
+            grayIcon = makeGrayscale(image)
+        }
+    }
+
+    private func makeGrayscale(_ image: NSImage) -> NSImage {
+        guard let tiffData = image.tiffRepresentation,
+              let ciImage = CIImage(data: tiffData),
+              let filter = CIFilter(name: "CIColorControls") else { return image }
+        filter.setValue(ciImage, forKey: kCIInputImageKey)
+        filter.setValue(0.0, forKey: kCIInputSaturationKey)
+        guard let output = filter.outputImage else { return image }
+        let rep = NSCIImageRep(ciImage: output)
+        let gray = NSImage(size: rep.size)
+        gray.addRepresentation(rep)
+        gray.size = NSSize(width: 18, height: 18)
+        gray.isTemplate = false
+        return gray
+    }
+
+    // MARK: - StatusItem & Menu
+
+    private func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = statusItem.button {
+            if let icon = colorIcon {
+                button.image = icon
+            } else {
+                button.title = "VPN"
+            }
+        }
+    }
+
+    private func setupMenu() {
+        let menu = NSMenu()
+
+        // Status line (disabled, info only)
+        statusMenuItem = NSMenuItem(title: "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}", action: nil, keyEquivalent: "")
+        statusMenuItem.isEnabled = false
+        menu.addItem(statusMenuItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Toggle VPN
+        toggleMenuItem = NSMenuItem(title: "\u{041E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} VPN", action: #selector(toggleVPN), keyEquivalent: "")
+        toggleMenuItem.target = self
+        menu.addItem(toggleMenuItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Check access
+        let checkItem = NSMenuItem(title: "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{0438}\u{0442}\u{044C} \u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}", action: #selector(checkAccess), keyEquivalent: "")
+        checkItem.target = self
+        menu.addItem(checkItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Update core
+        let updateCoreItem = NSMenuItem(title: "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} \u{044F}\u{0434}\u{0440}\u{043E}", action: #selector(updateCore), keyEquivalent: "")
+        updateCoreItem.target = self
+        menu.addItem(updateCoreItem)
+
+        // Update config
+        let updateConfigItem = NSMenuItem(title: "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} \u{043A}\u{043E}\u{043D}\u{0444}\u{0438}\u{0433}", action: #selector(updateConfig), keyEquivalent: "")
+        updateConfigItem.target = self
+        menu.addItem(updateConfigItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Quit (only the menu bar app, NOT the VPN)
+        let quitItem = NSMenuItem(title: "\u{0412}\u{044B}\u{0439}\u{0442}\u{0438}", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        statusItem.menu = menu
+    }
+
+    // MARK: - Timer & Status
+
+    private func startTimer() {
+        timer = Timer.scheduledTimer(timeInterval: 5.0, target: self,
+                                     selector: #selector(updateStatus),
+                                     userInfo: nil, repeats: true)
+        RunLoop.current.add(timer!, forMode: .common)
+    }
+
+    @objc private func updateStatus() {
+        let running = isMihomoRunning()
+
+        // Update icon
+        if let button = statusItem.button {
+            if colorIcon != nil {
+                button.image = running ? colorIcon : grayIcon
+                button.title = ""
+            } else {
+                button.title = "VPN"
+            }
+        }
+
+        // Update menu items
+        if running {
+            statusMenuItem.title = "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}"
+            toggleMenuItem.title = "\u{041E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} VPN"
+        } else {
+            statusMenuItem.title = "\u{25CB} VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}"
+            toggleMenuItem.title = "\u{0417}\u{0430}\u{043F}\u{0443}\u{0441}\u{0442}\u{0438}\u{0442}\u{044C} VPN"
+        }
+    }
+
+    // MARK: - Process Check
+
+    private func isMihomoRunning() -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        task.arguments = ["-x", "mihomo"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+        return task.terminationStatus == 0
+    }
+
+    // MARK: - Actions
+
+    @objc private func toggleVPN() {
+        let running = isMihomoRunning()
+        let command = running ? "stop" : "start"
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
+            let shellCommand = "'" + escapedPath + "' " + command
+            let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
+            var errorDict: NSDictionary? = nil
+            let script = NSAppleScript(source: source)
+            script?.executeAndReturnError(&errorDict)
+
+            DispatchQueue.main.async {
+                if let error = errorDict {
+                    // User cancelled (-128) is not an error
+                    let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+                    if errorNumber != -128 {
+                        let msg = error[NSAppleScript.errorMessage] as? String ?? ""
+                        self.showNotification(title: "Dostup VPN",
+                                              text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
+                    }
+                } else {
+                    let text = running
+                        ? "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}"
+                        : "Dostup VPN \u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}"
+                    self.showNotification(title: "Dostup VPN", text: text)
+                }
+                self.updateStatus()
+            }
+        }
+    }
+
+    @objc private func checkAccess() {
+        runInTerminal(argument: "check")
+    }
+
+    @objc private func updateCore() {
+        runInTerminal(argument: "update-core")
+    }
+
+    @objc private func updateConfig() {
+        runInTerminal(argument: "update-config")
+    }
+
+    @objc private func quitApp() {
+        NSApplication.shared.terminate(nil)
+    }
+
+    // MARK: - Helpers
+
+    private func runInTerminal(argument: String) {
+        let escapedPath = controlScript.replacingOccurrences(of: "'", with: "'\\''")
+        let escapedArg = argument.replacingOccurrences(of: "'", with: "'\\''")
+        let fullCommand = "bash '" + escapedPath + "' '" + escapedArg + "'"
+        let source = "tell application \"Terminal\"\n    activate\n    do script \"\(fullCommand)\"\nend tell"
+        let script = NSAppleScript(source: source)
+        script?.executeAndReturnError(nil)
+    }
+
+    private func showNotification(title: String, text: String) {
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = text
+        NSUserNotificationCenter.default.deliver(notification)
+    }
+}
+
+// MARK: - Entry Point
+
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()
+SWIFTSOURCE
+
+    # Info.plist (LSUIElement=true — нет иконки в Dock)
+    cat > "$app_path/Contents/Info.plist" << 'SBPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>DostupVPN-StatusBar</string>
+    <key>CFBundleIdentifier</key>
+    <string>ru.dostup.vpn.statusbar</string>
+    <key>CFBundleName</key>
+    <string>Dostup VPN Status Bar</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+SBPLIST
+
+    # Компиляция
+    if swiftc -O -o "$app_path/Contents/MacOS/DostupVPN-StatusBar" \
+        -framework Cocoa -framework CoreImage \
+        "$statusbar_dir/DostupVPN-StatusBar.swift" 2>/dev/null; then
+
+        # Копируем иконку в Resources
+        if [[ -f "$statusbar_dir/icon_on.png" ]]; then
+            cp "$statusbar_dir/icon_on.png" "$app_path/Contents/Resources/"
+        fi
+
+        # Снимаем карантин
+        xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
+
+        # Создаём LaunchAgent
+        create_launch_agent
+
+        print_success "Menu bar приложение установлено"
+    else
+        print_warning "Не удалось скомпилировать menu bar приложение"
+        rm -rf "$statusbar_dir"
+    fi
+}
+
+# Создание LaunchAgent для автозапуска menu bar приложения
+create_launch_agent() {
+    local plist_dir="$HOME/Library/LaunchAgents"
+    local plist_path="$plist_dir/ru.dostup.vpn.statusbar.plist"
+
+    mkdir -p "$plist_dir"
+
+    # Используем полный путь к .app
+    local app_full_path="$DOSTUP_DIR/statusbar/DostupVPN-StatusBar.app"
+
+    cat > "$plist_path" << LAPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ru.dostup.vpn.statusbar</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/open</string>
+        <string>-a</string>
+        <string>${app_full_path}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+LAPLIST
+
+    # Загружаем LaunchAgent (запустит при следующем логине)
+    launchctl load "$plist_path" 2>/dev/null || true
+
+    # Запускаем сейчас
+    open -a "$app_full_path" 2>/dev/null || true
+}
+
 # --- DNS-функция (installer): восстановление при переустановке ---
 
 DNS_CONF_INSTALLER="$DOSTUP_DIR/original_dns.conf"
@@ -1013,6 +1424,11 @@ start_mihomo() {
 
 # Показ финального сообщения
 show_success_message() {
+    local statusbar_msg=""
+    if [[ -d "$DOSTUP_DIR/statusbar/DostupVPN-StatusBar.app" ]]; then
+        statusbar_msg="
+Иконка в menu bar — управление VPN из статусбара"
+    fi
     # Пробуем GUI диалог, если не работает - просто пропускаем
     osascript << EOF 2>/dev/null
 display dialog "Mihomo успешно установлен и запущен!
@@ -1023,7 +1439,7 @@ https://metacubex.github.io/metacubexd/
 API: 127.0.0.1:9090
 
 На рабочем столе создан ярлык:
-• Dostup_VPN — запуск/остановка/перезапуск" buttons {"OK"} default button 1 with title "Dostup"
+• Dostup_VPN — запуск/остановка/перезапуск${statusbar_msg}" buttons {"OK"} default button 1 with title "Dostup"
 EOF
 }
 
@@ -1041,6 +1457,10 @@ OLD_SUB_URL=""
 if [[ -f "$SETTINGS_FILE" ]]; then
     OLD_SUB_URL=$(sudo sed -n 's/.*"subscription_url": *"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null || true)
 fi
+
+# Остановка statusbar app
+launchctl unload "$HOME/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist" 2>/dev/null || true
+pkill -f "DostupVPN-StatusBar" 2>/dev/null || true
 
 # Остановка mihomo если запущен
 if pgrep -x "mihomo" > /dev/null; then
@@ -1149,6 +1569,9 @@ print_success "Скрипт создан"
 # Ярлыки на рабочем столе
 create_desktop_shortcuts
 
+# Menu bar приложение (если доступен swiftc)
+create_statusbar_app
+
 # Первый запуск
 echo ""
 if start_mihomo; then
@@ -1162,6 +1585,9 @@ if start_mihomo; then
     echo ""
     echo "Ярлык на рабочем столе:"
     echo "  • Dostup_VPN — запуск/остановка/перезапуск"
+    if [[ -d "$DOSTUP_DIR/statusbar/DostupVPN-StatusBar.app" ]]; then
+        echo "  • Иконка в menu bar (автозапуск при логине)"
+    fi
     echo ""
 
     show_success_message
