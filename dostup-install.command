@@ -835,29 +835,39 @@ do_start() {
 if [[ -n "$1" ]]; then
     case "$1" in
         start)
-            do_start_quick
+            # >/dev/null 2>&1 — чтобы do shell script не ждал фоновые процессы mihomo
+            do_start_quick >/dev/null 2>&1
             exit $?
             ;;
         stop)
-            do_stop
+            do_stop >/dev/null 2>&1
             exit $?
             ;;
         check)
             do_check_access
             echo ""
-            read -p "Нажмите Enter для закрытия..." < /dev/tty
+            echo "Окно закроется через 3 секунды..."
+            sleep 3
+            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+            disown
             exit 0
             ;;
         update-core)
             do_update_core
             echo ""
-            read -p "Нажмите Enter для закрытия..." < /dev/tty
+            echo "Окно закроется через 3 секунды..."
+            sleep 3
+            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+            disown
             exit 0
             ;;
         update-config)
             do_update_config
             echo ""
-            read -p "Нажмите Enter для закрытия..." < /dev/tty
+            echo "Окно закроется через 3 секунды..."
+            sleep 3
+            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+            disown
             exit 0
             ;;
         status)
@@ -1072,14 +1082,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Icons
 
     private func loadIcons() {
-        // NSImage нативно поддерживает .icns — конвертация через sips не нужна
         let iconPath = homeDir + "/dostup/icon.icns"
         if let image = NSImage(contentsOfFile: iconPath) {
-            image.size = NSSize(width: 18, height: 18)
-            image.isTemplate = false
-            colorIcon = image
-            grayIcon = makeGrayscale(image)
+            // Явно рендерим в bitmap 36x36 (@2x для Retina) — иначе .icns показывается белым
+            let size = NSSize(width: 18, height: 18)
+            colorIcon = renderImage(image, to: size)
+            grayIcon = makeGrayscale(colorIcon!)
         }
+    }
+
+    private func renderImage(_ image: NSImage, to size: NSSize) -> NSImage {
+        let pixelSize = NSSize(width: size.width * 2, height: size.height * 2)
+        let rendered = NSImage(size: size)
+        let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(pixelSize.width), pixelsHigh: Int(pixelSize.height),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.size = size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: size),
+                   from: NSRect(origin: .zero, size: image.size),
+                   operation: .copy, fraction: 1.0)
+        NSGraphicsContext.restoreGraphicsState()
+        rendered.addRepresentation(rep)
+        rendered.isTemplate = false
+        return rendered
     }
 
     private func makeGrayscale(_ image: NSImage) -> NSImage {
@@ -1090,9 +1118,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         filter.setValue(0.0, forKey: kCIInputSaturationKey)
         guard let output = filter.outputImage else { return image }
         let rep = NSCIImageRep(ciImage: output)
-        let gray = NSImage(size: rep.size)
+        let gray = NSImage(size: image.size)
         gray.addRepresentation(rep)
-        gray.size = NSSize(width: 18, height: 18)
         gray.isTemplate = false
         return gray
     }
@@ -1209,8 +1236,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
 
             let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-            // Оборачиваем в подоболочку с </dev/null чтобы do shell script не ждал фоновые процессы
-            let shellCommand = "bash -c '\\\"\\(escapedPath)\\\" " + command + " </dev/null'"
+            let shellCommand = "'" + escapedPath + "' " + command
             let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
             var errorDict: NSDictionary? = nil
             let script = NSAppleScript(source: source)
