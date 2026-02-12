@@ -30,7 +30,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Icons
 
     private func loadIcons() {
-        let iconPath = homeDir + "/dostup/statusbar/icon_on.png"
+        // NSImage нативно поддерживает .icns — конвертация через sips не нужна
+        let iconPath = homeDir + "/dostup/icon.icns"
         if let image = NSImage(contentsOfFile: iconPath) {
             image.size = NSSize(width: 18, height: 18)
             image.isTemplate = false
@@ -166,7 +167,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
 
             let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-            let shellCommand = "'" + escapedPath + "' " + command
+            // Оборачиваем в подоболочку с </dev/null чтобы do shell script не ждал фоновые процессы
+            let shellCommand = "bash -c '\\\"\\(escapedPath)\\\" " + command + " </dev/null'"
             let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
             var errorDict: NSDictionary? = nil
             let script = NSAppleScript(source: source)
@@ -174,7 +176,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             DispatchQueue.main.async {
                 if let error = errorDict {
-                    // User cancelled (-128) is not an error
                     let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
                     if errorNumber != -128 {
                         let msg = error[NSAppleScript.errorMessage] as? String ?? ""
@@ -211,12 +212,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Helpers
 
     private func runInTerminal(argument: String) {
+        // Используем временный .command файл вместо AppleScript automation Terminal
+        // (AppleScript automation блокируется macOS без подписи приложения)
         let escapedPath = controlScript.replacingOccurrences(of: "'", with: "'\\''")
         let escapedArg = argument.replacingOccurrences(of: "'", with: "'\\''")
-        let fullCommand = "bash '" + escapedPath + "' '" + escapedArg + "'"
-        let source = "tell application \"Terminal\"\n    activate\n    do script \"\(fullCommand)\"\nend tell"
-        let script = NSAppleScript(source: source)
-        script?.executeAndReturnError(nil)
+        let tempScript = homeDir + "/dostup/statusbar/run_command.command"
+        let content = "#!/bin/bash\nbash '\(escapedPath)' '\(escapedArg)'\n"
+        try? content.write(toFile: tempScript, atomically: true, encoding: .utf8)
+
+        // chmod +x
+        let chmod = Process()
+        chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        chmod.arguments = ["+x", tempScript]
+        try? chmod.run()
+        chmod.waitUntilExit()
+
+        // open -a Terminal (не требует Automation permissions)
+        let open = Process()
+        open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        open.arguments = ["-a", "Terminal", tempScript]
+        try? open.run()
     }
 
     private func showNotification(title: String, text: String) {
