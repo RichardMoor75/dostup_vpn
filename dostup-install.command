@@ -587,16 +587,78 @@ do_check_access() {
         return 1
     fi
 
-    while IFS= read -r site; do
-        # Проверяем доступность через curl с таймаутом 5 сек
-        if curl -s --head --connect-timeout 5 --max-time 10 "https://$site" > /dev/null 2>&1; then
-            echo -e "${GREEN}✓ $site — доступен${NC}"
-        else
-            echo -e "${RED}✗ $site — недоступен${NC}"
-        fi
-    done <<< "$sites"
+    # Проверка сайтов: $1 = "verbose" (с выводом) или "quiet" (только счёт)
+    # Результат в глобальных переменных _check_ok, _check_total
+    _check_sites() {
+        _check_ok=0
+        _check_total=0
+        while IFS= read -r site; do
+            _check_total=$((_check_total + 1))
+            if curl -s --head --connect-timeout 7 --max-time 12 "https://$site" > /dev/null 2>&1; then
+                [[ "$1" == "verbose" ]] && echo -e "${GREEN}✓ $site — доступен${NC}"
+                _check_ok=$((_check_ok + 1))
+            else
+                [[ "$1" == "verbose" ]] && echo -e "${RED}✗ $site — недоступен${NC}"
+            fi
+        done <<< "$sites"
+    }
 
+    # --- Первая проверка (с выводом каждого сайта) ---
+    _check_sites verbose
     echo ""
+
+    local failed=$((_check_total - _check_ok))
+    local threshold=$((_check_total / 2))
+
+    # Большинство доступны — всё ОК
+    if [[ $failed -le $threshold ]]; then
+        return 0
+    fi
+
+    # --- Большинство недоступно — перепроверяем ещё 2 раза ---
+    echo -e "${YELLOW}⚠ Большинство ресурсов недоступно, перепроверяю...${NC}"
+
+    local attempt
+    for attempt in 1 2; do
+        sleep 3
+        echo -e "${YELLOW}  Повторная проверка ($((attempt + 1))/3)...${NC}"
+        _check_sites quiet
+        failed=$((_check_total - _check_ok))
+        if [[ $failed -le $threshold ]]; then
+            echo -e "${GREEN}✓ Доступ есть (${_check_ok}/${_check_total} ресурсов доступны)${NC}"
+            return 0
+        fi
+        echo -e "${RED}  Недоступно: ${failed}/${_check_total}${NC}"
+    done
+
+    # --- Подтверждено: доступа нет — пробуем переключить DNS ---
+    echo ""
+    echo -e "${YELLOW}▶ Пробую переключить DNS на Mihomo (может потребоваться пароль)...${NC}"
+    sudo -v 2>/dev/null || true
+    save_and_set_mihomo_dns
+
+    for attempt in 1 2 3; do
+        sleep 3
+        echo ""
+        echo -e "${YELLOW}▶ Проверка после DNS-переключения ($attempt/3)...${NC}"
+        echo ""
+        _check_sites verbose
+        echo ""
+        failed=$((_check_total - _check_ok))
+        if [[ $failed -le $threshold ]]; then
+            echo -e "${GREEN}✓ DNS-переключение помогло! Доступ восстановлен${NC}"
+            return 0
+        fi
+    done
+
+    # --- DNS не помог — возвращаем обратно ---
+    echo -e "${RED}✗ Переключение DNS не помогло, возвращаю настройки...${NC}"
+    restore_original_dns
+    echo ""
+    echo "Возможные причины:"
+    echo "  • Конфиг некорректный или подписка истекла"
+    echo "  • Сеть блокирует VPN-трафик"
+    return 1
 }
 
 do_stop() {
@@ -727,7 +789,6 @@ do_start() {
     sleep 4
 
     if pgrep -x "mihomo" > /dev/null; then
-        save_and_set_mihomo_dns
         echo ""
         echo -e "${GREEN}============================================${NC}"
         echo -e "${GREEN}✓ Mihomo успешно запущен!${NC}"
@@ -891,50 +952,9 @@ LAUNCHER
     print_success "Приложение Dostup_VPN создано на рабочем столе"
 }
 
-# --- DNS-функции (installer) ---
+# --- DNS-функция (installer): восстановление при переустановке ---
 
 DNS_CONF_INSTALLER="$DOSTUP_DIR/original_dns.conf"
-
-get_active_network_service_installer() {
-    local device
-    device=$(route get default 2>/dev/null | awk '/interface:/{print $2}')
-    if [[ -z "$device" ]]; then
-        return 1
-    fi
-    local service=""
-    while IFS= read -r line; do
-        if [[ "$line" == *"Device: $device"* ]]; then
-            echo "$service"
-            return 0
-        fi
-        if [[ "$line" == "Hardware Port:"* ]]; then
-            service=$(echo "$line" | sed 's/Hardware Port: //')
-        fi
-    done < <(networksetup -listallhardwareports 2>/dev/null)
-    return 1
-}
-
-save_and_set_mihomo_dns_installer() {
-    local service
-    service=$(get_active_network_service_installer)
-    if [[ -z "$service" ]]; then
-        print_warning "Не удалось определить сетевой интерфейс, DNS не переключён"
-        return 0
-    fi
-
-    local current_dns
-    current_dns=$(networksetup -getdnsservers "$service" 2>/dev/null)
-
-    echo "$service" > "$DNS_CONF_INSTALLER"
-    if echo "$current_dns" | grep -q "There aren't any DNS Servers"; then
-        echo "empty" >> "$DNS_CONF_INSTALLER"
-    else
-        echo "$current_dns" >> "$DNS_CONF_INSTALLER"
-    fi
-
-    sudo networksetup -setdnsservers "$service" 198.18.0.1
-    print_success "DNS переключён на Mihomo (198.18.0.1)"
-}
 
 restore_original_dns_installer() {
     if [[ ! -f "$DNS_CONF_INSTALLER" ]]; then
@@ -1132,7 +1152,6 @@ create_desktop_shortcuts
 # Первый запуск
 echo ""
 if start_mihomo; then
-    save_and_set_mihomo_dns_installer
     echo ""
     echo -e "${GREEN}============================================${NC}"
     echo -e "${GREEN}    Установка завершена успешно!${NC}"
