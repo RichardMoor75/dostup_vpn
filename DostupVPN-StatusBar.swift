@@ -7,6 +7,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var toggleMenuItem: NSMenuItem!
+    private var checkMenuItem: NSMenuItem!
     private var timer: Timer?
 
     private var colorIcon: NSImage?
@@ -32,10 +33,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func loadIcons() {
         let iconPath = homeDir + "/dostup/icon.icns"
         if let image = NSImage(contentsOfFile: iconPath) {
-            // Явно рендерим в bitmap 36x36 (@2x для Retina) — иначе .icns показывается белым
             let size = NSSize(width: 18, height: 18)
-            colorIcon = renderImage(image, to: size)
-            grayIcon = makeGrayscale(colorIcon!)
+            let rendered = renderImage(image, to: size)
+            colorIcon = tintImage(rendered, with: NSColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1.0))
+            grayIcon = tintImage(rendered, with: NSColor(white: 0.55, alpha: 1.0))
         }
     }
 
@@ -58,18 +59,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return rendered
     }
 
-    private func makeGrayscale(_ image: NSImage) -> NSImage {
-        guard let tiffData = image.tiffRepresentation,
-              let ciImage = CIImage(data: tiffData),
-              let filter = CIFilter(name: "CIColorControls") else { return image }
-        filter.setValue(ciImage, forKey: kCIInputImageKey)
-        filter.setValue(0.0, forKey: kCIInputSaturationKey)
-        guard let output = filter.outputImage else { return image }
-        let rep = NSCIImageRep(ciImage: output)
-        let gray = NSImage(size: image.size)
-        gray.addRepresentation(rep)
-        gray.isTemplate = false
-        return gray
+    private func tintImage(_ image: NSImage, with color: NSColor) -> NSImage {
+        let tinted = NSImage(size: image.size)
+        tinted.lockFocus()
+        image.draw(in: NSRect(origin: .zero, size: image.size),
+                   from: .zero, operation: .copy, fraction: 1.0)
+        color.set()
+        NSRect(origin: .zero, size: image.size).fill(using: .sourceAtop)
+        tinted.unlockFocus()
+        tinted.isTemplate = false
+        return tinted
     }
 
     // MARK: - StatusItem & Menu
@@ -103,9 +102,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         // Check access
-        let checkItem = NSMenuItem(title: "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{0438}\u{0442}\u{044C} \u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}", action: #selector(checkAccess), keyEquivalent: "")
-        checkItem.target = self
-        menu.addItem(checkItem)
+        checkMenuItem = NSMenuItem(title: "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{0438}\u{0442}\u{044C} \u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}", action: #selector(checkAccess), keyEquivalent: "")
+        checkMenuItem.target = self
+        menu.addItem(checkMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -152,6 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Update menu items
+        checkMenuItem.isEnabled = running
         if running {
             statusMenuItem.title = "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}"
             toggleMenuItem.title = "\u{041E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} VPN"
@@ -178,33 +178,65 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleVPN() {
         let running = isMihomoRunning()
-        let command = running ? "stop" : "start"
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
             let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-            let shellCommand = "'" + escapedPath + "' " + command
+            let shellCommand: String
+            if running {
+                shellCommand = "'" + escapedPath + "' stop"
+            } else {
+                // & в конце — чтобы do shell script не ждал фоновые процессы mihomo
+                shellCommand = "'" + escapedPath + "' start </dev/null >/dev/null 2>&1 &"
+            }
             let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
             var errorDict: NSDictionary? = nil
             let script = NSAppleScript(source: source)
             script?.executeAndReturnError(&errorDict)
 
-            DispatchQueue.main.async {
+            if running {
+                // Stop — результат известен сразу
+                DispatchQueue.main.async {
+                    if let error = errorDict {
+                        let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+                        if errorNumber != -128 {
+                            let msg = error[NSAppleScript.errorMessage] as? String ?? ""
+                            self.showNotification(title: "Dostup VPN",
+                                                  text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
+                        }
+                    } else {
+                        self.showNotification(title: "Dostup VPN",
+                                              text: "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}")
+                    }
+                    self.updateStatus()
+                }
+            } else {
+                // Start — команда фоновая, ждём 5 сек и проверяем
                 if let error = errorDict {
                     let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
-                    if errorNumber != -128 {
-                        let msg = error[NSAppleScript.errorMessage] as? String ?? ""
-                        self.showNotification(title: "Dostup VPN",
-                                              text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
+                    DispatchQueue.main.async {
+                        if errorNumber != -128 {
+                            let msg = error[NSAppleScript.errorMessage] as? String ?? ""
+                            self.showNotification(title: "Dostup VPN",
+                                                  text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
+                        }
+                        self.updateStatus()
                     }
                 } else {
-                    let text = running
-                        ? "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}"
-                        : "Dostup VPN \u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}"
-                    self.showNotification(title: "Dostup VPN", text: text)
+                    Thread.sleep(forTimeInterval: 5.0)
+                    let started = self.isMihomoRunning()
+                    DispatchQueue.main.async {
+                        if started {
+                            self.showNotification(title: "Dostup VPN",
+                                                  text: "Dostup VPN \u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}")
+                        } else {
+                            self.showNotification(title: "Dostup VPN",
+                                                  text: "\u{041D}\u{0435} \u{0443}\u{0434}\u{0430}\u{043B}\u{043E}\u{0441}\u{044C} \u{0437}\u{0430}\u{043F}\u{0443}\u{0441}\u{0442}\u{0438}\u{0442}\u{044C} VPN")
+                        }
+                        self.updateStatus()
+                    }
                 }
-                self.updateStatus()
             }
         }
     }
