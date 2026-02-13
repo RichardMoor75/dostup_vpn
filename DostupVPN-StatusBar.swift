@@ -31,47 +31,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Icons
 
     private func loadIcons() {
-        let iconPath = homeDir + "/dostup/icon.icns"
-        if let image = NSImage(contentsOfFile: iconPath) {
-            let size = NSSize(width: 18, height: 18)
-            let rendered = renderImage(image, to: size)
-            colorIcon = tintImage(rendered, with: CIColor(red: 0.2, green: 0.8, blue: 0.3))
-            grayIcon = tintImage(rendered, with: CIColor(red: 0.55, green: 0.55, blue: 0.55))
+        let statusbarDir = homeDir + "/dostup/statusbar"
+        let size = NSSize(width: 18, height: 18)
+
+        if let on = NSImage(contentsOfFile: statusbarDir + "/icon_on.png") {
+            on.size = size
+            on.isTemplate = false
+            colorIcon = on
         }
-    }
-
-    private func renderImage(_ image: NSImage, to size: NSSize) -> NSImage {
-        let pixelSize = NSSize(width: size.width * 2, height: size.height * 2)
-        let rendered = NSImage(size: size)
-        let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: Int(pixelSize.width), pixelsHigh: Int(pixelSize.height),
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-        rep.size = size
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        image.draw(in: NSRect(origin: .zero, size: size),
-                   from: NSRect(origin: .zero, size: image.size),
-                   operation: .copy, fraction: 1.0)
-        NSGraphicsContext.restoreGraphicsState()
-        rendered.addRepresentation(rep)
-        rendered.isTemplate = false
-        return rendered
-    }
-
-    private func tintImage(_ image: NSImage, with ciColor: CIColor) -> NSImage {
-        guard let tiffData = image.tiffRepresentation,
-              let ciImage = CIImage(data: tiffData),
-              let filter = CIFilter(name: "CIColorMonochrome") else { return image }
-        filter.setValue(ciImage, forKey: kCIInputImageKey)
-        filter.setValue(ciColor, forKey: kCIInputColorKey)
-        filter.setValue(1.0, forKey: kCIInputIntensityKey)
-        guard let output = filter.outputImage else { return image }
-        let rep = NSCIImageRep(ciImage: output)
-        let result = NSImage(size: image.size)
-        result.addRepresentation(rep)
-        result.isTemplate = false
-        return result
+        if let off = NSImage(contentsOfFile: statusbarDir + "/icon_off.png") {
+            off.size = size
+            off.isTemplate = false
+            grayIcon = off
+        }
     }
 
     // MARK: - StatusItem & Menu
