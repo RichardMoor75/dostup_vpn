@@ -835,11 +835,16 @@ do_start() {
 if [[ -n "$1" ]]; then
     case "$1" in
         start)
-            # exec закрывает pipe от do shell script — NSAppleScript возвращается немедленно,
-            # а скрипт продолжает работать (запускает mihomo, ждёт, проверяет)
+            # Быстрый запуск для menu bar app:
+            # exec закрывает stdout pipe — do shell script не ждёт фоновые процессы
+            # Без sleep/pgrep — проверку делает Swift через 5 сек
             exec </dev/null >/dev/null 2>&1
-            do_start_quick
-            exit $?
+            /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null || true
+            /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null || true
+            : > "$DOSTUP_DIR/logs/mihomo.log" 2>/dev/null || true
+            nohup "$MIHOMO_BIN" -d "$DOSTUP_DIR" >> "$DOSTUP_DIR/logs/mihomo.log" 2>&1 </dev/null &
+            disown 2>/dev/null
+            exit 0
             ;;
         stop)
             do_stop >/dev/null 2>&1
