@@ -262,7 +262,7 @@ Write-OK "Architecture: $arch"
 Write-Step 'Getting latest mihomo version...'
 try {
     $headers = @{ 'User-Agent' = 'Dostup-Installer' }
-    $release = Invoke-RestMethod -Uri $MIHOMO_API -Headers $headers
+    $release = Invoke-RestMethod -Uri $MIHOMO_API -Headers $headers -TimeoutSec 15
     $version = $release.tag_name
     Write-OK "Version: $version"
 } catch {
@@ -293,7 +293,7 @@ if (-not (Invoke-DownloadWithRetry $downloadUrl $zipPath)) {
 Write-Step 'Verifying file integrity...'
 $checksumUrl = "https://github.com/MetaCubeX/mihomo/releases/download/$version/$filename.sha256"
 try {
-    $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0]
+    $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop -TimeoutSec 15).Content.Trim().Split()[0]
     # Check if it looks like SHA256 (64 hex chars)
     if ($expectedHash -match '^[a-fA-F0-9]{64}$') {
         $actualHash = Get-FileSHA256 $zipPath
@@ -551,7 +551,7 @@ function Get-FileSHA256($path) {
 function Test-MihomoChecksum($version, $filename, $archivePath) {
     $checksumUrl = "https://github.com/MetaCubeX/mihomo/releases/download/$version/$filename.sha256"
     try {
-        $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0]
+        $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop -TimeoutSec 15).Content.Trim().Split()[0]
         if ($expectedHash -match '^[a-fA-F0-9]{64}$') {
             $actualHash = Get-FileSHA256 $archivePath
             return ($expectedHash.ToUpper() -eq $actualHash.ToUpper())
@@ -640,7 +640,7 @@ function Update-Providers {
 
     foreach ($ep in $endpoints) {
         try {
-            Invoke-WebRequest -Uri $ep.Url -Method Put -UseBasicParsing -ErrorAction Stop | Out-Null
+            Invoke-WebRequest -Uri $ep.Url -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
             Write-OK "$($ep.Name) — обновлено"
         } catch {
             Write-Fail "$($ep.Name) — ошибка: $_"
@@ -735,7 +735,7 @@ function Start-Mihomo {
     Write-Step 'Проверка обновлений ядра...'
     try {
         $headers = @{ 'User-Agent' = 'Dostup-Installer' }
-        $rel = Invoke-RestMethod -Uri $MIHOMO_API -Headers $headers
+        $rel = Invoke-RestMethod -Uri $MIHOMO_API -Headers $headers -TimeoutSec 15
         $latest = $rel.tag_name
         if ($settings.installed_version -ne $latest) {
             Write-Step "Обновление: $($settings.installed_version) → $latest"
