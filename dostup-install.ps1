@@ -626,6 +626,30 @@ function Disable-SystemProxy {
     }
 }
 
+function Update-Providers {
+    Write-Host ''
+    Write-Step 'Обновление провайдеров...'
+    Write-Host ''
+
+    $api = 'http://127.0.0.1:9090'
+    $endpoints = @(
+        @{ Name = 'Прокси (Subscription)'; Url = "$api/providers/proxies/Subscription" },
+        @{ Name = 'Правила (direct-rules)'; Url = "$api/providers/rules/direct-rules" },
+        @{ Name = 'Правила (proxy-rules)'; Url = "$api/providers/rules/proxy-rules" }
+    )
+
+    foreach ($ep in $endpoints) {
+        try {
+            Invoke-WebRequest -Uri $ep.Url -Method Put -UseBasicParsing -ErrorAction Stop | Out-Null
+            Write-OK "$($ep.Name) — обновлено"
+        } catch {
+            Write-Fail "$($ep.Name) — ошибка: $_"
+        }
+    }
+
+    Write-Host ''
+}
+
 function Test-SiteAccess {
     Write-Host ''
     Write-Step 'Проверка доступа к ресурсам...'
@@ -826,10 +850,11 @@ if ($proc) {
     Write-Host ''
     Write-Host '1) Остановить'
     Write-Host '2) Перезапустить'
-    Write-Host '3) Проверить доступ'
-    Write-Host '4) Отмена'
+    Write-Host '3) Обновить прокси и правила'
+    Write-Host '4) Проверить доступ'
+    Write-Host '5) Отмена'
     Write-Host ''
-    $choice = Read-Host 'Выберите (1-4)'
+    $choice = Read-Host 'Выберите (1-5)'
 
     switch ($choice) {
         '1' {
@@ -847,6 +872,10 @@ if ($proc) {
             Start-Sleep -Seconds 5
         }
         '3' {
+            Update-Providers
+            Read-Host 'Нажмите Enter для закрытия'
+        }
+        '4' {
             Test-SiteAccess
             Read-Host 'Нажмите Enter для закрытия'
         }
