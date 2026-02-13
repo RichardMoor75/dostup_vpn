@@ -35,8 +35,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let image = NSImage(contentsOfFile: iconPath) {
             let size = NSSize(width: 18, height: 18)
             let rendered = renderImage(image, to: size)
-            colorIcon = tintImage(rendered, with: NSColor(red: 0.2, green: 0.8, blue: 0.3, alpha: 1.0))
-            grayIcon = tintImage(rendered, with: NSColor(white: 0.55, alpha: 1.0))
+            colorIcon = tintImage(rendered, with: CIColor(red: 0.2, green: 0.8, blue: 0.3))
+            grayIcon = tintImage(rendered, with: CIColor(red: 0.55, green: 0.55, blue: 0.55))
         }
     }
 
@@ -59,16 +59,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return rendered
     }
 
-    private func tintImage(_ image: NSImage, with color: NSColor) -> NSImage {
-        let tinted = NSImage(size: image.size)
-        tinted.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: image.size),
-                   from: .zero, operation: .copy, fraction: 1.0)
-        color.set()
-        NSRect(origin: .zero, size: image.size).fill(using: .sourceAtop)
-        tinted.unlockFocus()
-        tinted.isTemplate = false
-        return tinted
+    private func tintImage(_ image: NSImage, with ciColor: CIColor) -> NSImage {
+        guard let tiffData = image.tiffRepresentation,
+              let ciImage = CIImage(data: tiffData),
+              let filter = CIFilter(name: "CIColorMonochrome") else { return image }
+        filter.setValue(ciImage, forKey: kCIInputImageKey)
+        filter.setValue(ciColor, forKey: kCIInputColorKey)
+        filter.setValue(1.0, forKey: kCIInputIntensityKey)
+        guard let output = filter.outputImage else { return image }
+        let rep = NSCIImageRep(ciImage: output)
+        let result = NSImage(size: image.size)
+        result.addRepresentation(rep)
+        result.isTemplate = false
+        return result
     }
 
     // MARK: - StatusItem & Menu
@@ -183,59 +186,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
 
             let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-            let shellCommand: String
-            if running {
-                shellCommand = "'" + escapedPath + "' stop"
-            } else {
-                // & в конце — чтобы do shell script не ждал фоновые процессы mihomo
-                shellCommand = "'" + escapedPath + "' start </dev/null >/dev/null 2>&1 &"
-            }
+            let shellCommand = "'" + escapedPath + "' " + (running ? "stop" : "start")
             let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
             var errorDict: NSDictionary? = nil
             let script = NSAppleScript(source: source)
             script?.executeAndReturnError(&errorDict)
 
-            if running {
-                // Stop — результат известен сразу
+            if let error = errorDict {
+                let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
                 DispatchQueue.main.async {
-                    if let error = errorDict {
-                        let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
-                        if errorNumber != -128 {
-                            let msg = error[NSAppleScript.errorMessage] as? String ?? ""
-                            self.showNotification(title: "Dostup VPN",
-                                                  text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
-                        }
-                    } else {
+                    if errorNumber != -128 {
+                        let msg = error[NSAppleScript.errorMessage] as? String ?? ""
                         self.showNotification(title: "Dostup VPN",
-                                              text: "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}")
+                                              text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
                     }
                     self.updateStatus()
                 }
+            } else if running {
+                // Stop — результат известен сразу
+                DispatchQueue.main.async {
+                    self.showNotification(title: "Dostup VPN",
+                                          text: "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}")
+                    self.updateStatus()
+                }
             } else {
-                // Start — команда фоновая, ждём 5 сек и проверяем
-                if let error = errorDict {
-                    let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
-                    DispatchQueue.main.async {
-                        if errorNumber != -128 {
-                            let msg = error[NSAppleScript.errorMessage] as? String ?? ""
-                            self.showNotification(title: "Dostup VPN",
-                                                  text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
-                        }
-                        self.updateStatus()
+                // Start — скрипт закрывает pipe через exec, do shell script возвращается сразу,
+                // но mihomo нужно время на запуск — ждём 5 сек и проверяем
+                Thread.sleep(forTimeInterval: 5.0)
+                let started = self.isMihomoRunning()
+                DispatchQueue.main.async {
+                    if started {
+                        self.showNotification(title: "Dostup VPN",
+                                              text: "Dostup VPN \u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}")
+                    } else {
+                        self.showNotification(title: "Dostup VPN",
+                                              text: "\u{041D}\u{0435} \u{0443}\u{0434}\u{0430}\u{043B}\u{043E}\u{0441}\u{044C} \u{0437}\u{0430}\u{043F}\u{0443}\u{0441}\u{0442}\u{0438}\u{0442}\u{044C} VPN")
                     }
-                } else {
-                    Thread.sleep(forTimeInterval: 5.0)
-                    let started = self.isMihomoRunning()
-                    DispatchQueue.main.async {
-                        if started {
-                            self.showNotification(title: "Dostup VPN",
-                                                  text: "Dostup VPN \u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}")
-                        } else {
-                            self.showNotification(title: "Dostup VPN",
-                                                  text: "\u{041D}\u{0435} \u{0443}\u{0434}\u{0430}\u{043B}\u{043E}\u{0441}\u{044C} \u{0437}\u{0430}\u{043F}\u{0443}\u{0441}\u{0442}\u{0438}\u{0442}\u{044C} VPN")
-                        }
-                        self.updateStatus()
-                    }
+                    self.updateStatus()
                 }
             }
         }
