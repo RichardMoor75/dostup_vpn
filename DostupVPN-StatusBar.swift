@@ -186,7 +186,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
 
             let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-            let shellCommand = "'" + escapedPath + "' " + (running ? "stop" : "start")
+            let shellCommand: String
+            if running {
+                shellCommand = "'" + escapedPath + "' stop"
+            } else {
+                // > /dev/null 2>&1 & — Apple TN2065: do shell script возвращается немедленно
+                // когда stdout/stderr перенаправлены и команда в фоне
+                shellCommand = "'" + escapedPath + "' start > /dev/null 2>&1 &"
+            }
             let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
             var errorDict: NSDictionary? = nil
             let script = NSAppleScript(source: source)

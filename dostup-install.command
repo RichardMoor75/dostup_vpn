@@ -835,15 +835,9 @@ do_start() {
 if [[ -n "$1" ]]; then
     case "$1" in
         start)
-            # Быстрый запуск для menu bar app:
-            # exec закрывает stdout pipe — do shell script не ждёт фоновые процессы
-            # Без sleep/pgrep — проверку делает Swift через 5 сек
-            exec </dev/null >/dev/null 2>&1
-            /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null || true
-            /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null || true
-            : > "$DOSTUP_DIR/logs/mihomo.log" 2>/dev/null || true
-            nohup "$MIHOMO_BIN" -d "$DOSTUP_DIR" >> "$DOSTUP_DIR/logs/mihomo.log" 2>&1 </dev/null &
-            disown 2>/dev/null
+            # do shell script вызывает с "> /dev/null 2>&1 &" (Apple TN2065) —
+            # возвращается немедленно, скрипт работает в фоне как root
+            do_start_quick
             exit 0
             ;;
         stop)
@@ -1245,7 +1239,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
 
             let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-            let shellCommand = "'" + escapedPath + "' " + (running ? "stop" : "start")
+            let shellCommand: String
+            if running {
+                shellCommand = "'" + escapedPath + "' stop"
+            } else {
+                // > /dev/null 2>&1 & — Apple TN2065: do shell script возвращается немедленно
+                // когда stdout/stderr перенаправлены и команда в фоне
+                shellCommand = "'" + escapedPath + "' start > /dev/null 2>&1 &"
+            }
             let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
             var errorDict: NSDictionary? = nil
             let script = NSAppleScript(source: source)
