@@ -101,7 +101,7 @@ function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
             $retry = 0
             while ($retry -lt $maxRetries) {
                 try {
-                    Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+                    Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 30
                     if ((Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                         return $true
                     }
@@ -122,7 +122,7 @@ function Invoke-DownloadWithRetry($url, $output, $maxRetries = 3) {
     $retry = 0
     while ($retry -lt $maxRetries) {
         try {
-            Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+            Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 30
             return $true
         } catch {
             $retry++
@@ -492,7 +492,7 @@ function Invoke-DownloadWithRetry($url, $output) {
     $retry = 0
     while ($retry -lt 3) {
         try {
-            Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+            Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 30
             return $true
         } catch {
             $retry++
