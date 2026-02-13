@@ -37,12 +37,25 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Скачивает geo-базы (geoip.dat, geosite.dat)
 - Создаёт ярлык `Dostup_VPN` на рабочем столе (на Linux — systemd-сервис + CLI `dostup`)
 - Настраивает брандмауэр (macOS Application Firewall / Windows Firewall)
-- Переключает системный DNS на Mihomo для защиты от DNS-утечки (macOS)
+- Защита от DNS-утечки: умная проверка и переключение DNS (macOS)
 - Запускает Mihomo
 
 ## Управление
 
-После установки на рабочем столе появится ярлык **Dostup_VPN** (macOS/Windows) или команда `dostup` (Linux). Запусти для:
+### macOS — иконка в меню-баре
+
+На Mac с установленным Xcode CLT (`swiftc`) автоматически создаётся приложение в строке меню:
+
+- Цветная иконка (зелёный кот) — VPN работает, серая — остановлен
+- Запуск / остановка VPN одним кликом (с запросом пароля администратора)
+- Проверка доступа, обновление ядра и конфига
+- Автозапуск при входе в систему (LaunchAgent)
+
+Если Xcode CLT не установлен — создаётся ярлык **Dostup_VPN** на рабочем столе (как на Windows).
+
+### Все платформы
+
+На рабочем столе появится ярлык **Dostup_VPN** (macOS/Windows) или команда `dostup` (Linux). Запусти для:
 
 - Остановки VPN
 - Перезапуска VPN (с обновлением конфига и ядра)
@@ -96,6 +109,10 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ├── original_dns.conf        # Сохранённый DNS (создаётся при запуске, удаляется при остановке)
 ├── Dostup_VPN.command       # Скрипт управления (macOS)
 ├── Dostup_VPN.ps1           # Скрипт управления (Windows)
+├── statusbar/               # Menu bar приложение (macOS, если есть swiftc)
+│   ├── DostupVPN-StatusBar.app
+│   ├── icon_on.png          # Зелёная иконка (VPN работает)
+│   └── icon_off.png         # Серая иконка (VPN остановлен)
 └── logs/
     └── mihomo.log           # Логи
 
@@ -127,6 +144,10 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 ### macOS
 ```bash
+# Остановить menu bar app и LaunchAgent
+launchctl unload ~/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist 2>/dev/null
+rm -f ~/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist
+pkill -f DostupVPN-StatusBar 2>/dev/null
 # Восстановить DNS (если mihomo запущен)
 IFACE=$(route get default 2>/dev/null | awk '/interface:/{print $2}')
 sudo networksetup -setdnsservers "$(networksetup -listallhardwareports | grep -B1 "Device: $IFACE" | head -1 | sed 's/Hardware Port: //')" empty
