@@ -185,14 +185,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
             let shellCommand: String
             if running {
+                let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
                 shellCommand = "'" + escapedPath + "' stop"
             } else {
-                // > /dev/null 2>&1 & — Apple TN2065: do shell script возвращается немедленно
-                // когда stdout/stderr перенаправлены и команда в фоне
-                shellCommand = "'" + escapedPath + "' start > /dev/null 2>&1 &"
+                // Запуск mihomo напрямую (без control script) — Apple TN2065 паттерн
+                let dostupDir = self.homeDir + "/dostup"
+                let mihomoBin = dostupDir + "/mihomo"
+                let logFile = dostupDir + "/logs/mihomo.log"
+                let eBin = mihomoBin.replacingOccurrences(of: "'", with: "'\\''")
+                let eDir = dostupDir.replacingOccurrences(of: "'", with: "'\\''")
+                let eLog = logFile.replacingOccurrences(of: "'", with: "'\\''")
+                shellCommand = "/usr/libexec/ApplicationFirewall/socketfilterfw --add '\(eBin)' 2>/dev/null; " +
+                    "/usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp '\(eBin)' 2>/dev/null; " +
+                    "'\(eBin)' -d '\(eDir)' > '\(eLog)' 2>&1 &"
             }
             let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
             var errorDict: NSDictionary? = nil
@@ -210,15 +217,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.updateStatus()
                 }
             } else if running {
-                // Stop — результат известен сразу
                 DispatchQueue.main.async {
                     self.showNotification(title: "Dostup VPN",
                                           text: "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}")
                     self.updateStatus()
                 }
             } else {
-                // Start — скрипт закрывает pipe через exec, do shell script возвращается сразу,
-                // но mihomo нужно время на запуск — ждём 5 сек и проверяем
+                // Mihomo нужно время на запуск — ждём 5 сек и проверяем
                 Thread.sleep(forTimeInterval: 5.0)
                 let started = self.isMihomoRunning()
                 DispatchQueue.main.async {
