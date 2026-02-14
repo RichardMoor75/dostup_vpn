@@ -530,7 +530,7 @@ save_and_set_mihomo_dns() {
     fi
 
     # Устанавливаем DNS на mihomo fake-ip
-    sudo networksetup -setdnsservers "$service" 198.18.0.1
+    sudo -n networksetup -setdnsservers "$service" 198.18.0.1
     echo -e "${GREEN}✓ DNS переключён на Mihomo (198.18.0.1)${NC}"
 }
 
@@ -551,10 +551,10 @@ restore_original_dns() {
     dns_servers=$(tail -n +2 "$DNS_CONF")
 
     if [[ "$dns_servers" == "empty" ]]; then
-        sudo networksetup -setdnsservers "$service" empty
+        sudo -n networksetup -setdnsservers "$service" empty
     else
         # Передаём все серверы через пробел
-        sudo networksetup -setdnsservers "$service" $dns_servers
+        sudo -n networksetup -setdnsservers "$service" $dns_servers
     fi
 
     rm -f "$DNS_CONF"
@@ -565,7 +565,6 @@ check_dns_recovery() {
     # Защита от крэша: если mihomo не работает, а DNS-файл остался — восстановить
     if [[ -f "$DNS_CONF" ]] && ! pgrep -x "mihomo" > /dev/null; then
         echo -e "${YELLOW}⚠ Обнаружен незавершённый DNS-фикс, восстанавливаю...${NC}"
-        sudo -v 2>/dev/null || true
         restore_original_dns
     fi
 }
@@ -635,8 +634,7 @@ do_check_access() {
 
     # --- Подтверждено: доступа нет — пробуем переключить DNS ---
     echo ""
-    echo -e "${YELLOW}▶ Пробую переключить DNS на Mihomo (может потребоваться пароль)...${NC}"
-    sudo -v 2>/dev/null || true
+    echo -e "${YELLOW}▶ Пробую переключить DNS на Mihomo...${NC}"
     save_and_set_mihomo_dns
 
     for attempt in 1 2 3; do
@@ -664,11 +662,14 @@ do_check_access() {
 }
 
 do_stop() {
-    echo -e "${YELLOW}▶ Остановка Mihomo (требуется пароль администратора)...${NC}"
+    echo -e "${YELLOW}▶ Остановка Mihomo...${NC}"
     echo ""
-    sudo -v
     restore_original_dns
-    sudo pkill -9 mihomo 2>/dev/null || true
+    sudo -n launchctl stop ru.dostup.vpn.mihomo 2>/dev/null || true
+    # Fallback: если LaunchDaemon не активен
+    if pgrep -x "mihomo" > /dev/null; then
+        sudo -n pkill mihomo 2>/dev/null || true
+    fi
     # Ожидание с timeout
     stop_timeout=10
     while pgrep -x "mihomo" > /dev/null && [[ $stop_timeout -gt 0 ]]; do
@@ -743,15 +744,11 @@ do_update_config() {
 
 do_start_quick() {
     # Настройка Application Firewall
-    /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null || true
-    /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null || true
+    sudo -n /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null || true
+    sudo -n /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null || true
 
-    # Создаём лог-файл
-    : > "$DOSTUP_DIR/logs/mihomo.log" 2>/dev/null || true
-
-    # Запускаем mihomo в подоболочке с </dev/null
-    # (критично для do shell script — иначе AppleScript ждёт завершения всех дочерних процессов)
-    (nohup "$MIHOMO_BIN" -d "$DOSTUP_DIR" >> "$DOSTUP_DIR/logs/mihomo.log" 2>&1 </dev/null &)
+    # Запуск через LaunchDaemon
+    sudo -n launchctl start ru.dostup.vpn.mihomo
     sleep 4
 
     if pgrep -x "mihomo" > /dev/null; then
@@ -795,23 +792,15 @@ do_start() {
     fi
 
     # Запуск
-    echo -e "${YELLOW}▶ Запуск Mihomo (требуется пароль администратора)...${NC}"
+    echo -e "${YELLOW}▶ Запуск Mihomo...${NC}"
     echo ""
 
-    if ! sudo -v; then
-        echo -e "${RED}✗ Не удалось получить права администратора${NC}"
-        return 1
-    fi
-
     # Настройка Application Firewall
-    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
-    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
+    sudo -n /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
+    sudo -n /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
 
-    # Создаём лог-файл от текущего пользователя (чтобы не был root-owned)
-    : > "$DOSTUP_DIR/logs/mihomo.log"
-
-    # Запускаем
-    sudo nohup "$MIHOMO_BIN" -d "$DOSTUP_DIR" >> "$DOSTUP_DIR/logs/mihomo.log" 2>&1 &
+    # Запуск через LaunchDaemon
+    sudo -n launchctl start ru.dostup.vpn.mihomo
 
     sleep 4
 
@@ -1246,38 +1235,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            let shellCommand: String
-            if running {
-                let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-                shellCommand = "'" + escapedPath + "' stop"
-            } else {
-                // Запуск mihomo напрямую (без control script) — Apple TN2065 паттерн
-                let dostupDir = self.homeDir + "/dostup"
-                let mihomoBin = dostupDir + "/mihomo"
-                let logFile = dostupDir + "/logs/mihomo.log"
-                let eBin = mihomoBin.replacingOccurrences(of: "'", with: "'\\''")
-                let eDir = dostupDir.replacingOccurrences(of: "'", with: "'\\''")
-                let eLog = logFile.replacingOccurrences(of: "'", with: "'\\''")
-                shellCommand = "/usr/libexec/ApplicationFirewall/socketfilterfw --add '\(eBin)' 2>/dev/null; " +
-                    "/usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp '\(eBin)' 2>/dev/null; " +
-                    "'\(eBin)' -d '\(eDir)' > '\(eLog)' 2>&1 &"
-            }
-            let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
-            var errorDict: NSDictionary? = nil
-            let script = NSAppleScript(source: source)
-            script?.executeAndReturnError(&errorDict)
+            let task = Process()
 
-            if let error = errorDict {
-                let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+            if running {
+                // Stop: через control script (обрабатывает DNS restore)
+                task.executableURL = URL(fileURLWithPath: "/bin/bash")
+                let ePath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
+                task.arguments = ["-c", "'" + ePath + "' stop"]
+            } else {
+                // Start: напрямую через launchctl (без пароля, через sudoers)
+                task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+                task.arguments = ["-n", "/bin/launchctl", "start", "ru.dostup.vpn.mihomo"]
+            }
+
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+            } catch {
                 DispatchQueue.main.async {
-                    if errorNumber != -128 {
-                        let msg = error[NSAppleScript.errorMessage] as? String ?? ""
-                        self.showNotification(title: "Dostup VPN",
-                                              text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
-                    }
+                    self.showNotification(title: "Dostup VPN",
+                                          text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: \(error.localizedDescription)")
                     self.updateStatus()
                 }
-            } else if running {
+                return
+            }
+
+            if running {
                 DispatchQueue.main.async {
                     self.showNotification(title: "Dostup VPN",
                                           text: "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}")
@@ -1463,6 +1449,82 @@ LAPLIST
     open -a "$app_full_path" 2>/dev/null || true
 }
 
+# Создание LaunchDaemon для mihomo (системный сервис)
+create_launch_daemon() {
+    print_step "Создание LaunchDaemon для mihomo..."
+
+    local plist_path="/Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist"
+    local log_path="$HOME/dostup/logs/mihomo.log"
+    local mihomo_path="$HOME/dostup/mihomo"
+    local dostup_path="$HOME/dostup"
+
+    # Создаём директорию для логов
+    mkdir -p "$LOGS_DIR"
+
+    sudo tee "$plist_path" > /dev/null << LDPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ru.dostup.vpn.mihomo</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${mihomo_path}</string>
+        <string>-d</string>
+        <string>${dostup_path}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>${log_path}</string>
+</dict>
+</plist>
+LDPLIST
+
+    sudo chmod 644 "$plist_path"
+    sudo launchctl load "$plist_path" 2>/dev/null || true
+
+    print_success "LaunchDaemon создан"
+}
+
+# Создание sudoers-записи для passwordless управления VPN
+create_sudoers_entry() {
+    print_step "Настройка passwordless управления VPN..."
+
+    local sudoers_tmp="/tmp/dostup-sudoers.tmp"
+    local sudoers_path="/etc/sudoers.d/dostup-vpn"
+
+    cat > "$sudoers_tmp" << 'SUDOERS'
+# DostupVPN — passwordless VPN management for admin users
+%admin ALL=(root) NOPASSWD: /bin/launchctl start ru.dostup.vpn.mihomo
+%admin ALL=(root) NOPASSWD: /bin/launchctl stop ru.dostup.vpn.mihomo
+%admin ALL=(root) NOPASSWD: /bin/launchctl load /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist
+%admin ALL=(root) NOPASSWD: /bin/launchctl unload /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist
+%admin ALL=(root) NOPASSWD: /usr/sbin/networksetup -setdnsservers *
+%admin ALL=(root) NOPASSWD: /usr/libexec/ApplicationFirewall/socketfilterfw --add *
+%admin ALL=(root) NOPASSWD: /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp *
+SUDOERS
+
+    # Валидация перед установкой
+    if sudo visudo -cf "$sudoers_tmp" 2>/dev/null; then
+        sudo cp "$sudoers_tmp" "$sudoers_path"
+        sudo chmod 0440 "$sudoers_path"
+        rm -f "$sudoers_tmp"
+        print_success "Passwordless управление настроено"
+    else
+        rm -f "$sudoers_tmp"
+        print_warning "Не удалось создать sudoers-запись (VPN будет запрашивать пароль)"
+    fi
+}
+
 # --- DNS-функция (installer): восстановление при переустановке ---
 
 DNS_CONF_INSTALLER="$DOSTUP_DIR/original_dns.conf"
@@ -1494,24 +1556,19 @@ restore_original_dns_installer() {
 
 # Запуск mihomo
 start_mihomo() {
-    print_step "Запуск Mihomo (требуется пароль администратора)..."
+    print_step "Запуск Mihomo..."
     echo ""
 
-    # Сначала получаем sudo-права (запрос пароля)
-    if ! sudo -v; then
-        print_error "Не удалось получить права администратора"
-        return 1
-    fi
-
     # Настройка Application Firewall (разрешаем mihomo)
+    # sudo ещё интерактивный при первой установке
     sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
     sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
 
-    # Создаём лог-файл от текущего пользователя (чтобы не был root-owned)
+    # Лог-файл от текущего пользователя (launchd будет дописывать)
     : > "$LOGS_DIR/mihomo.log"
 
-    # Запускаем полностью отвязанным от терминала
-    sudo nohup "$MIHOMO_BIN" -d "$DOSTUP_DIR" >> "$LOGS_DIR/mihomo.log" 2>&1 &
+    # Запуск через LaunchDaemon
+    sudo launchctl start ru.dostup.vpn.mihomo
 
     sleep 4
 
@@ -1562,7 +1619,11 @@ fi
 launchctl unload "$HOME/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist" 2>/dev/null || true
 pkill -f "DostupVPN-StatusBar" 2>/dev/null || true
 
-# Остановка mihomo если запущен
+# Остановка mihomo через LaunchDaemon (если загружен)
+sudo launchctl stop ru.dostup.vpn.mihomo 2>/dev/null || true
+sudo launchctl unload /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist 2>/dev/null || true
+
+# Остановка mihomo если запущен (fallback для старых версий)
 if pgrep -x "mihomo" > /dev/null; then
     print_step "Остановка запущенного Mihomo..."
     restore_original_dns_installer
@@ -1586,6 +1647,8 @@ fi
 # Удаление старой установки
 if [[ -d "$DOSTUP_DIR" ]]; then
     print_step "Удаление старой установки..."
+    sudo rm -f /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist
+    sudo rm -f /etc/sudoers.d/dostup-vpn
     sudo rm -rf "$DOSTUP_DIR"
     print_success "Старая установка удалена"
 fi
@@ -1671,6 +1734,12 @@ create_desktop_shortcuts
 
 # Menu bar приложение (если доступен swiftc)
 create_statusbar_app
+
+# Passwordless управление VPN (sudoers)
+create_sudoers_entry
+
+# LaunchDaemon для mihomo (системный сервис)
+create_launch_daemon
 
 # Первый запуск
 echo ""
