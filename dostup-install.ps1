@@ -1329,8 +1329,7 @@ public class DostupVPNService : ServiceBase
     $cscDir = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
     $cscExe = Join-Path $cscDir 'csc.exe'
     if (Test-Path $cscExe) {
-        $svcDll = Join-Path $cscDir 'System.ServiceProcess.dll'
-        $cscOutput = & $cscExe /nologo /target:exe /out:$svcExe /reference:$svcDll $csPath 2>&1
+        $cscOutput = & $cscExe /nologo /target:exe /out:$svcExe /r:System.ServiceProcess.dll $csPath 2>&1
         if (Test-Path $svcExe) {
             Write-OK 'Service wrapper compiled'
         } else {
@@ -1352,7 +1351,7 @@ try {
     )
 
     if ($osVersion.Major -ge 10 -and (Test-Path $svcExe)) {
-        $sddl = 'D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;RPWPCR;;;IU)'
+        $sddl = 'D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;LCRPWPCRRC;;;IU)'
         $elevatedCommands += @(
             "sc.exe create DostupVPN binPath= `"$svcExe`" start= demand type= own",
             "sc.exe sdset DostupVPN $sddl",
