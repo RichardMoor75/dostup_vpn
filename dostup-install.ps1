@@ -239,9 +239,6 @@ if ($trayProcs) {
     Write-OK 'Tray application stopped'
 }
 
-# Delete old service if exists
-sc.exe delete DostupVPN 2>$null | Out-Null
-
 # Remove old installation
 if (Test-Path $DOSTUP_DIR) {
     Write-Step 'Removing old installation...'
@@ -603,7 +600,7 @@ function Get-ProxyPort {
     $port = 2080
     if (Test-Path $CONFIG_FILE) {
         $cfg = Get-Content $CONFIG_FILE -Raw
-        if ($cfg -match 'mixed-port:\s*(\d+)') { $port = $matches[1] }
+        if ($cfg -match 'mixed-port:\s*(\d+)') { $port = [int]$matches[1] }
     }
     return $port
 }
@@ -1225,7 +1222,12 @@ $miCheck.Add_Click({
     Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$CONTROL_SCRIPT`" check"
 })
 
-[System.Windows.Forms.Application]::Run()
+try {
+    [System.Windows.Forms.Application]::Run()
+} finally {
+    $mutex.ReleaseMutex()
+    $mutex.Dispose()
+}
 '@
 $trayPs1 | Set-Content -Path "$DOSTUP_DIR\DostupVPN-Tray.ps1" -Encoding UTF8
 Write-OK 'Tray application created'
@@ -1278,7 +1280,8 @@ using System.ServiceProcess;
 public class DostupVPNService : ServiceBase
 {
     private Process _mihomo;
-    private bool _stopping;
+    private volatile bool _stopping;
+    private StreamWriter _logStream;
 
     public DostupVPNService() { ServiceName = "DostupVPN"; CanStop = true; }
 
@@ -1290,6 +1293,8 @@ public class DostupVPNService : ServiceBase
         Directory.CreateDirectory(Path.Combine(dir, "logs"));
 
         _stopping = false;
+        _logStream = new StreamWriter(log, false) { AutoFlush = true };
+
         _mihomo = new Process();
         _mihomo.StartInfo.FileName = exe;
         _mihomo.StartInfo.Arguments = "-d \"" + dir + "\"";
@@ -1298,12 +1303,10 @@ public class DostupVPNService : ServiceBase
         _mihomo.StartInfo.RedirectStandardError = true;
         _mihomo.StartInfo.CreateNoWindow = true;
         _mihomo.EnableRaisingEvents = true;
-
-        var logStream = new StreamWriter(log, false) { AutoFlush = true };
-        _mihomo.OutputDataReceived += (s, e) => { if (e.Data != null) try { logStream.WriteLine(e.Data); } catch {} };
-        _mihomo.ErrorDataReceived += (s, e) => { if (e.Data != null) try { logStream.WriteLine(e.Data); } catch {} };
+        _mihomo.OutputDataReceived += (s, e) => { if (e.Data != null) try { _logStream.WriteLine(e.Data); } catch {} };
+        _mihomo.ErrorDataReceived += (s, e) => { if (e.Data != null) try { _logStream.WriteLine(e.Data); } catch {} };
         _mihomo.Exited += (s, e) => {
-            if (!_stopping) { try { logStream.Close(); } catch {} Environment.Exit(1); }
+            if (!_stopping) { this.Stop(); }
         };
 
         _mihomo.Start();
@@ -1319,6 +1322,7 @@ public class DostupVPNService : ServiceBase
             _mihomo.Kill();
             _mihomo.WaitForExit(5000);
         }
+        try { _logStream.Close(); } catch {}
     }
 
     public static void Main() { ServiceBase.Run(new DostupVPNService()); }
@@ -1353,9 +1357,10 @@ try {
     if ($osVersion.Major -ge 10 -and (Test-Path $svcExe)) {
         $sddl = 'D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;LCRPWPCRRC;;;IU)'
         $elevatedCommands += @(
+            "sc.exe delete DostupVPN",
             "sc.exe create DostupVPN binPath= `"$svcExe`" start= demand type= own",
             "sc.exe sdset DostupVPN $sddl",
-            "sc.exe failure DostupVPN reset= 60 actions= restart/5000/restart/5000/restart/5000"
+            "sc.exe failure DostupVPN reset= 86400 actions= restart/5000/restart/30000//"
         )
     }
 
@@ -1389,9 +1394,7 @@ if ($serviceCreated) {
 if (Wait-MihomoStart 5) {
     # Enable system proxy for Windows < 10
     if ($osVersion.Major -lt 10) {
-        $proxyPort = 2080
-        $cfgContent = Get-Content $CONFIG_FILE -Raw
-        if ($cfgContent -match 'mixed-port:\s*(\d+)') { $proxyPort = $matches[1] }
+        $proxyPort = Get-MixedPort
         $proxyServer = "127.0.0.1:$proxyPort"
         $regPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
         Set-ItemProperty -Path $regPath -Name ProxyEnable -Value 1
