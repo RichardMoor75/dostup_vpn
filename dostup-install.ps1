@@ -17,6 +17,8 @@ $MIHOMO_API = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/latest'
 $GEOIP_URL = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat'
 $GEOSITE_URL = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat'
 $ICON_URL = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon.ico'
+$ICON_ON_URL = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon_on.png'
+$ICON_OFF_URL = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon_off.png'
 
 function Write-Step($text) { Write-Host "> $text" -ForegroundColor Yellow }
 function Write-OK($text) { Write-Host "[OK] $text" -ForegroundColor Green }
@@ -219,6 +221,16 @@ if ($mihomoProcess) {
     Write-OK 'Mihomo stopped'
 }
 
+# Kill existing tray process if running
+$trayProcs = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
+if ($trayProcs) {
+    Write-Step 'Stopping tray application...'
+    $trayProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
+    Write-OK 'Tray application stopped'
+}
+
 # Remove old installation
 if (Test-Path $DOSTUP_DIR) {
     Write-Step 'Removing old installation...'
@@ -392,31 +404,37 @@ if ($osVersion.Major -lt 10) {
     Write-OK 'TUN removed, using system proxy mode'
 }
 
-Write-Step 'Downloading geo databases and icon...'
+Write-Step 'Downloading geo databases and icons...'
 $geoSuccess = $true
 $iconPath = "$DOSTUP_DIR\icon.ico"
+$iconOnPath = "$DOSTUP_DIR\icon_on.png"
+$iconOffPath = "$DOSTUP_DIR\icon_off.png"
 $parallelAvailable = ($null -ne (Get-Command Start-Job -ErrorAction SilentlyContinue))
 
 if ($parallelAvailable) {
     $geoIpJob = Invoke-DownloadWithRetryJob $GEOIP_URL "$DOSTUP_DIR\geoip.dat"
     $geoSiteJob = Invoke-DownloadWithRetryJob $GEOSITE_URL "$DOSTUP_DIR\geosite.dat"
     $iconJob = Invoke-DownloadWithRetryJob $ICON_URL $iconPath
+    $iconOnJob = Invoke-DownloadWithRetryJob $ICON_ON_URL $iconOnPath
+    $iconOffJob = Invoke-DownloadWithRetryJob $ICON_OFF_URL $iconOffPath
 
-    if ($geoIpJob -and $geoSiteJob -and $iconJob) {
-        Wait-Job -Job @($geoIpJob, $geoSiteJob, $iconJob) | Out-Null
+    $allJobs = @($geoIpJob, $geoSiteJob, $iconJob, $iconOnJob, $iconOffJob) | Where-Object { $_ -ne $null }
+    if ($allJobs.Count -eq 5) {
+        Wait-Job -Job $allJobs | Out-Null
         $geoIpOk = [bool](Receive-Job $geoIpJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
         $geoSiteOk = [bool](Receive-Job $geoSiteJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
         $iconOk = [bool](Receive-Job $iconJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
-        Remove-Job -Job @($geoIpJob, $geoSiteJob, $iconJob) -Force -ErrorAction SilentlyContinue
+        $iconOnOk = [bool](Receive-Job $iconOnJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
+        $iconOffOk = [bool](Receive-Job $iconOffJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
+        Remove-Job -Job $allJobs -Force -ErrorAction SilentlyContinue
 
         if (-not $geoIpOk) { Write-Fail 'Failed to download geoip.dat'; $geoSuccess = $false }
         if (-not $geoSiteOk) { Write-Fail 'Failed to download geosite.dat'; $geoSuccess = $false }
         if ($geoSuccess) { Write-OK 'Geo databases downloaded' }
         if ($iconOk) { Write-OK 'Icon downloaded' } else { Write-Fail 'Icon download failed (shortcut will use default icon)' }
+        if ($iconOnOk -and $iconOffOk) { Write-OK 'Tray icons downloaded' } else { Write-Info 'Tray icons download failed (will use fallback icon)' }
     } else {
-        if ($geoIpJob) { Remove-Job $geoIpJob -Force -ErrorAction SilentlyContinue }
-        if ($geoSiteJob) { Remove-Job $geoSiteJob -Force -ErrorAction SilentlyContinue }
-        if ($iconJob) { Remove-Job $iconJob -Force -ErrorAction SilentlyContinue }
+        foreach ($j in $allJobs) { Remove-Job $j -Force -ErrorAction SilentlyContinue }
         $parallelAvailable = $false
     }
 }
@@ -438,6 +456,12 @@ if (-not $parallelAvailable) {
     } else {
         Write-Fail 'Icon download failed (shortcut will use default icon)'
     }
+    # Tray icons (non-fatal)
+    if (Invoke-DownloadWithRetry $ICON_ON_URL $iconOnPath) {
+        if (Invoke-DownloadWithRetry $ICON_OFF_URL $iconOffPath) {
+            Write-OK 'Tray icons downloaded'
+        } else { Write-Info 'Tray icon_off download failed (will use fallback)' }
+    } else { Write-Info 'Tray icon_on download failed (will use fallback)' }
 }
 
 $settings = @{
@@ -836,6 +860,39 @@ function Start-Mihomo {
 
 # === MAIN ===
 
+# CLI mode (called from tray app or other scripts)
+if ($args.Count -gt 0) {
+    switch ($args[0]) {
+        'start' {
+            Start-Mihomo
+            exit
+        }
+        'stop' {
+            Stop-Mihomo
+            exit
+        }
+        'restart' {
+            Stop-Mihomo
+            Write-Host ''
+            Start-Mihomo
+            Write-Host ''
+            Write-Host 'Окно закроется через 5 секунд...'
+            Start-Sleep -Seconds 5
+            exit
+        }
+        'check' {
+            Test-SiteAccess
+            Read-Host 'Нажмите Enter для закрытия'
+            exit
+        }
+        'update-providers' {
+            Update-Providers
+            exit
+        }
+    }
+}
+
+# Interactive mode (desktop shortcut)
 Write-Host ''
 Write-Host '=== Dostup VPN ===' -ForegroundColor Blue
 Write-Host ''
@@ -903,6 +960,245 @@ Remove-Item "$DOSTUP_DIR\dostup-stop.ps1" -Force -ErrorAction SilentlyContinue
 
 Write-OK 'Control script created'
 
+Write-Step 'Creating tray application...'
+
+$trayPs1 = @'
+# DostupVPN Tray Application
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Hide console window
+Add-Type -Name Win32 -Namespace Native -MemberDefinition @"
+[DllImport("kernel32.dll")]
+public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")]
+public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+"@
+$consolePtr = [Native.Win32]::GetConsoleWindow()
+[Native.Win32]::ShowWindow($consolePtr, 0) | Out-Null
+
+# Single instance via mutex
+$mutexName = 'Global\DostupVPN-Tray'
+$createdNew = $false
+$mutex = New-Object System.Threading.Mutex($true, $mutexName, [ref]$createdNew)
+if (-not $createdNew) {
+    exit
+}
+
+$DOSTUP_DIR = "$env:USERPROFILE\dostup"
+$CONTROL_SCRIPT = "$DOSTUP_DIR\Dostup_VPN.ps1"
+$MIHOMO_BIN = "$DOSTUP_DIR\mihomo.exe"
+$CONFIG_FILE = "$DOSTUP_DIR\config.yaml"
+
+# Load icon from PNG file
+function ConvertTo-Icon($pngPath) {
+    try {
+        if (Test-Path $pngPath) {
+            $bmp = New-Object System.Drawing.Bitmap($pngPath)
+            $hIcon = $bmp.GetHicon()
+            $bmp.Dispose()
+            $icon = [System.Drawing.Icon]::FromHandle($hIcon)
+            return $icon
+        }
+    } catch { }
+    return $null
+}
+
+$iconOn = ConvertTo-Icon "$DOSTUP_DIR\icon_on.png"
+$iconOff = ConvertTo-Icon "$DOSTUP_DIR\icon_off.png"
+
+# Fallback to icon.ico
+$icoPath = "$DOSTUP_DIR\icon.ico"
+if ((-not $iconOn) -and (Test-Path $icoPath)) {
+    try { $iconOn = New-Object System.Drawing.Icon($icoPath) } catch { }
+}
+if ((-not $iconOff) -and (Test-Path $icoPath)) {
+    try { $iconOff = New-Object System.Drawing.Icon($icoPath) } catch { }
+}
+
+# Ultimate fallback
+if (-not $iconOn) { $iconOn = [System.Drawing.SystemIcons]::Application }
+if (-not $iconOff) { $iconOff = [System.Drawing.SystemIcons]::Application }
+
+# Create NotifyIcon
+$tray = New-Object System.Windows.Forms.NotifyIcon
+$tray.Visible = $true
+$tray.Text = 'Dostup VPN'
+
+# Context menu
+$cms = New-Object System.Windows.Forms.ContextMenuStrip
+
+$miStatus = New-Object System.Windows.Forms.ToolStripMenuItem
+$miStatus.Enabled = $false
+
+$sep1 = New-Object System.Windows.Forms.ToolStripSeparator
+
+$miToggle = New-Object System.Windows.Forms.ToolStripMenuItem
+
+$miRestart = New-Object System.Windows.Forms.ToolStripMenuItem
+$miRestart.Text = [char]0x21BB + ' Перезапустить'
+
+$sep2 = New-Object System.Windows.Forms.ToolStripSeparator
+
+$miUpdate = New-Object System.Windows.Forms.ToolStripMenuItem
+$miUpdate.Text = 'Обновить прокси и правила'
+
+$miCheck = New-Object System.Windows.Forms.ToolStripMenuItem
+$miCheck.Text = 'Проверить доступ'
+
+$sep3 = New-Object System.Windows.Forms.ToolStripSeparator
+
+$miExit = New-Object System.Windows.Forms.ToolStripMenuItem
+$miExit.Text = 'Выход'
+
+[void]$cms.Items.Add($miStatus)
+[void]$cms.Items.Add($sep1)
+[void]$cms.Items.Add($miToggle)
+[void]$cms.Items.Add($miRestart)
+[void]$cms.Items.Add($sep2)
+[void]$cms.Items.Add($miUpdate)
+[void]$cms.Items.Add($miCheck)
+[void]$cms.Items.Add($sep3)
+[void]$cms.Items.Add($miExit)
+
+$tray.ContextMenuStrip = $cms
+
+# Helper: get proxy port from config
+function Get-ProxyPort {
+    $port = 2080
+    if (Test-Path $CONFIG_FILE) {
+        try {
+            $cfg = Get-Content $CONFIG_FILE -Raw
+            if ($cfg -match 'mixed-port:\s*(\d+)') { $port = [int]$matches[1] }
+        } catch { }
+    }
+    return $port
+}
+
+function Test-VpnRunning {
+    return ($null -ne (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue))
+}
+
+# Update UI based on mihomo status
+function Update-Status {
+    if (Test-VpnRunning) {
+        $tray.Icon = $iconOn
+        $tray.Text = 'Dostup VPN - работает'
+        $miStatus.Text = [char]0x25CF + ' VPN работает'
+        $miStatus.ForeColor = [System.Drawing.Color]::Green
+        $miToggle.Text = 'Остановить VPN'
+        $miRestart.Enabled = $true
+        $miUpdate.Enabled = $true
+        $miCheck.Enabled = $true
+    } else {
+        $tray.Icon = $iconOff
+        $tray.Text = 'Dostup VPN - остановлен'
+        $miStatus.Text = [char]0x25CB + ' VPN остановлен'
+        $miStatus.ForeColor = [System.Drawing.Color]::Gray
+        $miToggle.Text = 'Запустить VPN'
+        $miRestart.Enabled = $false
+        $miUpdate.Enabled = $false
+        $miCheck.Enabled = $false
+    }
+}
+
+Update-Status
+
+# Timer for polling status (every 5 seconds)
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 5000
+$timer.Add_Tick({ Update-Status })
+$timer.Start()
+
+# Toggle VPN (start/stop inline, no terminal window)
+$miToggle.Add_Click({
+    if (Test-VpnRunning) {
+        try {
+            Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+            $osVer = [Environment]::OSVersion.Version
+            if ($osVer.Major -lt 10) {
+                $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+                Set-ItemProperty -Path $reg -Name ProxyEnable -Value 0
+            }
+            Start-Sleep -Seconds 1
+            Update-Status
+            $tray.ShowBalloonTip(3000, 'Dostup VPN', 'VPN остановлен', [System.Windows.Forms.ToolTipIcon]::Info)
+        } catch {
+            $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Ошибка остановки', [System.Windows.Forms.ToolTipIcon]::Error)
+        }
+    } else {
+        try {
+            Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+            Start-Sleep -Seconds 3
+            $osVer = [Environment]::OSVersion.Version
+            if ($osVer.Major -lt 10) {
+                $port = Get-ProxyPort
+                $proxy = "127.0.0.1:$port"
+                $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+                Set-ItemProperty -Path $reg -Name ProxyEnable -Value 1
+                Set-ItemProperty -Path $reg -Name ProxyServer -Value $proxy
+            }
+            Update-Status
+            $tray.ShowBalloonTip(3000, 'Dostup VPN', 'VPN запущен', [System.Windows.Forms.ToolTipIcon]::Info)
+        } catch {
+            $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Ошибка запуска', [System.Windows.Forms.ToolTipIcon]::Error)
+        }
+    }
+})
+
+# Restart (opens terminal with control script)
+$miRestart.Add_Click({
+    Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$CONTROL_SCRIPT`" restart"
+})
+
+# Update providers (inline PUT requests, balloon notification)
+$miUpdate.Add_Click({
+    try {
+        $api = 'http://127.0.0.1:9090'
+        $endpoints = @(
+            "$api/providers/proxies/Subscription",
+            "$api/providers/rules/direct-rules",
+            "$api/providers/rules/proxy-rules"
+        )
+        $errors = 0
+        foreach ($ep in $endpoints) {
+            try {
+                Invoke-WebRequest -Uri $ep -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+            } catch { $errors++ }
+        }
+        if ($errors -eq 0) {
+            $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Провайдеры обновлены', [System.Windows.Forms.ToolTipIcon]::Info)
+        } else {
+            $tray.ShowBalloonTip(3000, 'Dostup VPN', "Обновлено с ошибками ($errors)", [System.Windows.Forms.ToolTipIcon]::Warning)
+        }
+    } catch {
+        $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Ошибка обновления', [System.Windows.Forms.ToolTipIcon]::Error)
+    }
+})
+
+# Check access (opens terminal)
+$miCheck.Add_Click({
+    Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$CONTROL_SCRIPT`" check"
+})
+
+# Exit
+$miExit.Add_Click({
+    $timer.Stop()
+    $timer.Dispose()
+    $tray.Visible = $false
+    $tray.Dispose()
+    $mutex.ReleaseMutex()
+    $mutex.Dispose()
+    [System.Windows.Forms.Application]::Exit()
+})
+
+[System.Windows.Forms.Application]::Run()
+'@
+$trayPs1 | Set-Content -Path "$DOSTUP_DIR\DostupVPN-Tray.ps1" -Encoding UTF8
+Write-OK 'Tray application created'
+
 Write-Step 'Creating desktop shortcut...'
 $WshShell = New-Object -ComObject WScript.Shell
 
@@ -920,7 +1216,19 @@ if (Test-Path $iconPath) {
 }
 $vpnLnk.Save()
 
-Write-OK 'Shortcut created'
+Write-OK 'Desktop shortcut created'
+
+Write-Step 'Creating startup shortcut for tray...'
+$startupFolder = [Environment]::GetFolderPath('Startup')
+$trayLnk = $WshShell.CreateShortcut("$startupFolder\DostupVPN-Tray.lnk")
+$trayLnk.TargetPath = "powershell.exe"
+$trayLnk.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$DOSTUP_DIR\DostupVPN-Tray.ps1`""
+$trayLnk.WorkingDirectory = $DOSTUP_DIR
+if (Test-Path $iconPath) {
+    $trayLnk.IconLocation = "$iconPath,0"
+}
+$trayLnk.Save()
+Write-OK 'Startup shortcut created'
 
 Write-Step 'Configuring firewall...'
 try {
@@ -954,6 +1262,14 @@ if (Wait-MihomoStart 5) {
         Set-ItemProperty -Path $regPath -Name ProxyServer -Value $proxyServer
         Write-OK "System proxy enabled: $proxyServer"
     }
+
+    # Launch tray application
+    $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
+    if (Test-Path $trayScript) {
+        Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden
+        Write-OK 'Tray application started'
+    }
+
     Write-Host ''
     Write-Host '============================================' -ForegroundColor Green
     Write-Host '    Installation completed!' -ForegroundColor Green
@@ -964,6 +1280,9 @@ if (Wait-MihomoStart 5) {
     Write-Host ''
     Write-Host 'Desktop shortcut:'
     Write-Host '  - Dostup_VPN'
+    Write-Host ''
+    Write-Host 'System tray:'
+    Write-Host '  - VPN icon in the notification area (auto-start with Windows)'
     Write-Host ''
 } else {
     Write-Host '[FAIL] Failed to start Mihomo' -ForegroundColor Red
