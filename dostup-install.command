@@ -1411,7 +1411,9 @@ create_launch_agent() {
     <string>ru.dostup.vpn.statusbar</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${app_full_path}/Contents/MacOS/DostupVPN-StatusBar</string>
+        <string>/usr/bin/open</string>
+        <string>-a</string>
+        <string>${app_full_path}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
