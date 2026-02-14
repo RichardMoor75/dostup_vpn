@@ -51,7 +51,18 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Проверка доступа, обновление ядра и конфига
 - Автозапуск при входе в систему (LaunchAgent)
 
-Если Xcode CLT не установлен — создаётся ярлык **Dostup_VPN** на рабочем столе (как на Windows).
+Если Xcode CLT не установлен — создаётся ярлык **Dostup_VPN** на рабочем столе.
+
+### Windows — иконка в системном трее
+
+При установке автоматически создаётся приложение в области уведомлений (системный трей):
+
+- Цветная иконка (зелёный кот) — VPN работает, серая — остановлен
+- Запуск / остановка VPN одним кликом (с запросом прав администратора)
+- Обновление прокси и правил, проверка доступа
+- Автозапуск при входе в Windows (ярлык в автозагрузке)
+
+Также на рабочем столе создаётся ярлык **Dostup_VPN** с интерактивным меню.
 
 ### Все платформы
 
@@ -59,6 +70,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 - Остановки VPN
 - Перезапуска VPN (с обновлением конфига и ядра)
+- Обновления провайдеров прокси и правил
 - Проверки доступа к заблокированным ресурсам
 
 На Linux используй `sudo dostup start|stop|restart|status|check|log`.
@@ -109,6 +121,9 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ├── original_dns.conf        # Сохранённый DNS (создаётся при запуске, удаляется при остановке)
 ├── Dostup_VPN.command       # Скрипт управления (macOS)
 ├── Dostup_VPN.ps1           # Скрипт управления (Windows)
+├── DostupVPN-Tray.ps1       # Tray-приложение (Windows)
+├── icon_on.png              # Иконка трея: VPN работает (Windows)
+├── icon_off.png             # Иконка трея: VPN остановлен (Windows)
 ├── statusbar/               # Menu bar приложение (macOS, если есть swiftc)
 │   ├── DostupVPN-StatusBar.app
 │   ├── icon_on.png          # Зелёная иконка (VPN работает)
@@ -158,9 +173,15 @@ rm -rf ~/Desktop/Dostup_VPN.app
 
 ### Windows (PowerShell от администратора)
 ```powershell
+# Остановить VPN и tray-приложение
 Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
+Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" |
+    Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+# Удалить файлы и ярлыки
 Remove-Item -Recurse -Force "$env:USERPROFILE\dostup"
-Remove-Item "$env:USERPROFILE\Desktop\Dostup_VPN.lnk"
+Remove-Item "$env:USERPROFILE\Desktop\Dostup_VPN.lnk" -ErrorAction SilentlyContinue
+Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\DostupVPN-Tray.lnk" -ErrorAction SilentlyContinue
 ```
 
 ### Linux
