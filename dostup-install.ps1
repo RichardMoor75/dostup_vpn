@@ -1057,13 +1057,18 @@ $tray.Text = 'Dostup VPN'
 
 # Context menu
 $cms = New-Object System.Windows.Forms.ContextMenuStrip
+$cms.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+
+$boldFont = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
 
 $miStatus = New-Object System.Windows.Forms.ToolStripMenuItem
 $miStatus.Enabled = $false
+$miStatus.Font = $boldFont
 
 $sep1 = New-Object System.Windows.Forms.ToolStripSeparator
 
 $miToggle = New-Object System.Windows.Forms.ToolStripMenuItem
+$miToggle.Font = $boldFont
 
 $miRestart = New-Object System.Windows.Forms.ToolStripMenuItem
 $miRestart.Text = [char]0x21BB + ' Перезапустить'
