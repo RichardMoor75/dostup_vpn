@@ -337,20 +337,8 @@ download_geo() {
     local geoip_ok=true
     local geosite_ok=true
 
-    download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat" &
-    local geoip_pid=$!
-    download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat" &
-    local geosite_pid=$!
-
-    if ! wait "$geoip_pid"; then
-        print_error "Не удалось скачать geoip.dat"
-        geoip_ok=false
-    fi
-
-    if ! wait "$geosite_pid"; then
-        print_error "Не удалось скачать geosite.dat"
-        geosite_ok=false
-    fi
+    download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat" || geoip_ok=false
+    download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat" || geosite_ok=false
 
     if $geoip_ok && $geosite_ok; then
         update_settings "last_geo_update" "$(date +%Y-%m-%d)"
@@ -362,17 +350,10 @@ download_geo() {
     return 0
 }
 
-# Скачивание geo-баз и иконки (параллельно для ускорения установки)
-download_assets_parallel() {
-    print_step "Параллельное скачивание geo-баз и иконки..."
-    download_geo &
-    local geo_pid=$!
-    download_icon &
-    local icon_pid=$!
-
-    wait "$geo_pid" || true
-    wait "$icon_pid" || true
-
+# Скачивание geo-баз и иконки
+download_assets() {
+    download_geo
+    download_icon
     return 0
 }
 
@@ -399,7 +380,16 @@ GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/
 GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
 SITES_FILE="$DOSTUP_DIR/sites.json"
 
-# Функции
+# --- Utility ---
+close_terminal_window() {
+    local delay="${1:-0.5}"
+    (sleep "$delay" && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
+    disown
+}
+
+# NOTE: Functions below are duplicated from the installer.
+# When modifying, ensure changes are reflected in both places.
+
 read_settings() {
     local key="$1"
     if [[ -f "$SETTINGS_FILE" ]]; then
@@ -504,7 +494,7 @@ get_active_network_service() {
             return 0
         fi
         if [[ "$line" == "Hardware Port:"* ]]; then
-            service=$(echo "$line" | sed 's/Hardware Port: //')
+            service=$(echo "$line" | sed 's/Hardware Port: //' | sed 's/[[:space:]]*$//')
         fi
     done < <(networksetup -listallhardwareports 2>/dev/null)
     return 1
@@ -553,7 +543,7 @@ restore_original_dns() {
     if [[ "$dns_servers" == "empty" ]]; then
         sudo -n networksetup -setdnsservers "$service" empty
     else
-        # Передаём все серверы через пробел
+        # Intentionally unquoted: each DNS server must be a separate argument
         sudo -n networksetup -setdnsservers "$service" $dns_servers
     fi
 
@@ -832,7 +822,7 @@ if [[ -n "$1" ]]; then
             exit 0
             ;;
         stop)
-            do_stop >/dev/null 2>&1
+            do_stop >/dev/null
             exit $?
             ;;
         check)
@@ -840,8 +830,7 @@ if [[ -n "$1" ]]; then
             echo ""
             echo "Окно закроется через 3 секунды..."
             sleep 3
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         update-core)
@@ -849,8 +838,7 @@ if [[ -n "$1" ]]; then
             echo ""
             echo "Окно закроется через 3 секунды..."
             sleep 3
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         update-config)
@@ -858,8 +846,7 @@ if [[ -n "$1" ]]; then
             echo ""
             echo "Окно закроется через 3 секунды..."
             sleep 3
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         restart)
@@ -869,8 +856,7 @@ if [[ -n "$1" ]]; then
             echo ""
             echo "Окно закроется через 5 секунд..."
             sleep 5
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         update-providers)
@@ -881,8 +867,7 @@ if [[ -n "$1" ]]; then
             echo ""
             echo "Окно закроется через 3 секунды..."
             sleep 3
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         status)
@@ -923,8 +908,7 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Окно закроется через 3 секунды..."
             sleep 3
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         2)
@@ -934,8 +918,7 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Окно закроется через 5 секунд..."
             sleep 5
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         3)
@@ -947,15 +930,13 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Окно закроется через 3 секунды..."
             sleep 3
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         4)
             do_check_access
             read -p "Нажмите Enter для закрытия..." < /dev/tty
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
         *)
@@ -964,8 +945,7 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Окно закроется через 2 секунды..."
             sleep 2
-            (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-            disown
+            close_terminal_window
             exit 0
             ;;
     esac
@@ -975,8 +955,7 @@ else
     echo ""
     echo "Окно закроется через 5 секунд..."
     sleep 5
-    (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-    disown
+    close_terminal_window
     exit 0
 fi
 CONTROLSCRIPT
@@ -1353,10 +1332,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showNotification(title: String, text: String) {
-        let notification = NSUserNotification()
-        notification.title = title
-        notification.informativeText = text
-        NSUserNotificationCenter.default.deliver(notification)
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e",
+            "display notification \"\(text)\" with title \"\(title)\""]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
     }
 }
 
@@ -1430,9 +1412,7 @@ create_launch_agent() {
     <string>ru.dostup.vpn.statusbar</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/open</string>
-        <string>-a</string>
-        <string>${app_full_path}</string>
+        <string>${app_full_path}/Contents/MacOS/DostupVPN-StatusBar</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -1458,8 +1438,9 @@ create_launch_daemon() {
     local mihomo_path="$HOME/dostup/mihomo"
     local dostup_path="$HOME/dostup"
 
-    # Создаём директорию для логов
+    # Создаём директорию для логов с правами для root и текущего пользователя
     mkdir -p "$LOGS_DIR"
+    chmod 777 "$LOGS_DIR"
 
     sudo tee "$plist_path" > /dev/null << LDPLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1502,15 +1483,17 @@ create_sudoers_entry() {
     local sudoers_tmp="/tmp/dostup-sudoers.tmp"
     local sudoers_path="/etc/sudoers.d/dostup-vpn"
 
-    cat > "$sudoers_tmp" << 'SUDOERS'
+    local mihomo_path_escaped="$HOME/dostup/mihomo"
+    cat > "$sudoers_tmp" << SUDOERS
 # DostupVPN — passwordless VPN management for admin users
 %admin ALL=(root) NOPASSWD: /bin/launchctl start ru.dostup.vpn.mihomo
 %admin ALL=(root) NOPASSWD: /bin/launchctl stop ru.dostup.vpn.mihomo
 %admin ALL=(root) NOPASSWD: /bin/launchctl load /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist
 %admin ALL=(root) NOPASSWD: /bin/launchctl unload /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist
+# DNS: wildcard needed for service name + restore of saved DNS servers
 %admin ALL=(root) NOPASSWD: /usr/sbin/networksetup -setdnsservers *
-%admin ALL=(root) NOPASSWD: /usr/libexec/ApplicationFirewall/socketfilterfw --add *
-%admin ALL=(root) NOPASSWD: /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp *
+%admin ALL=(root) NOPASSWD: /usr/libexec/ApplicationFirewall/socketfilterfw --add ${mihomo_path_escaped}
+%admin ALL=(root) NOPASSWD: /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp ${mihomo_path_escaped}
 SUDOERS
 
     # Валидация перед установкой
@@ -1526,6 +1509,8 @@ SUDOERS
 }
 
 # --- DNS-функция (installer): восстановление при переустановке ---
+# NOTE: Similar to restore_original_dns() in control script,
+# but uses interactive sudo (not -n) since installer runs interactively.
 
 DNS_CONF_INSTALLER="$DOSTUP_DIR/original_dns.conf"
 
@@ -1547,6 +1532,7 @@ restore_original_dns_installer() {
     if [[ "$dns_servers" == "empty" ]]; then
         sudo networksetup -setdnsservers "$service" empty
     else
+        # Intentionally unquoted: each DNS server must be a separate argument
         sudo networksetup -setdnsservers "$service" $dns_servers
     fi
 
@@ -1617,7 +1603,7 @@ fi
 
 # Остановка statusbar app
 launchctl unload "$HOME/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist" 2>/dev/null || true
-pkill -f "DostupVPN-StatusBar" 2>/dev/null || true
+pkill -x "DostupVPN-StatusBar" 2>/dev/null || true
 
 # Остановка mihomo через LaunchDaemon (если загружен)
 sudo launchctl stop ru.dostup.vpn.mihomo 2>/dev/null || true
@@ -1627,14 +1613,18 @@ sudo launchctl unload /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist 2>/dev/n
 if pgrep -x "mihomo" > /dev/null; then
     print_step "Остановка запущенного Mihomo..."
     restore_original_dns_installer
-    sudo pkill -9 mihomo 2>/dev/null || true
+    sudo pkill mihomo 2>/dev/null || true
     # Ожидание с timeout вместо фиксированного sleep
     stop_timeout=10
     while pgrep -x "mihomo" > /dev/null && [[ $stop_timeout -gt 0 ]]; do
         sleep 1
         stop_timeout=$((stop_timeout - 1))
     done
-    # Проверка что остановился
+    # Force kill если SIGTERM не помог
+    if pgrep -x "mihomo" > /dev/null; then
+        sudo pkill -9 mihomo 2>/dev/null || true
+        sleep 1
+    fi
     if pgrep -x "mihomo" > /dev/null; then
         print_error "Не удалось остановить Mihomo"
         echo "Закройте все программы использующие dostup и попробуйте снова"
@@ -1719,7 +1709,7 @@ if ! download_config "$SUB_URL"; then
 fi
 
 # Скачивание geo-баз и иконки
-download_assets_parallel
+download_assets
 
 # Создание sites.json
 create_sites_json
@@ -1769,5 +1759,4 @@ echo ""
 echo "Окно закроется через 5 секунд..."
 sleep 5
 (sleep 0.5 && osascript -e 'tell application "Terminal" to close front window saving no' &>/dev/null) &
-disown
 exit 0

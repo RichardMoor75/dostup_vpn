@@ -16,7 +16,6 @@ NC='\033[0m'
 
 # --- Пути ---
 DOSTUP_DIR="/opt/dostup"
-LOGS_DIR="$DOSTUP_DIR/logs"
 CONFIG_FILE="$DOSTUP_DIR/config.yaml"
 SETTINGS_FILE="$DOSTUP_DIR/settings.json"
 MIHOMO_BIN="$DOSTUP_DIR/mihomo"
@@ -156,19 +155,24 @@ validate_url() {
 validate_yaml() {
     local file="$1"
     local content
-    content=$(head -c 1000 "$file" 2>/dev/null)
+    content=$(cat "$file" 2>/dev/null)
 
     # Проверяем что это не HTML (ошибка сервера)
-    if echo "$content" | grep -qiE '<!DOCTYPE|<html|<head'; then
+    if echo "$content" | head -c 1000 | grep -qiE '<!DOCTYPE|<html|<head'; then
         return 1
     fi
 
     # Проверяем базовую структуру YAML
-    if echo "$content" | grep -qE '^[a-zA-Z_-]+:'; then
-        return 0
+    if ! echo "$content" | grep -qE '^[a-zA-Z_-]+:'; then
+        return 1
     fi
 
-    return 1
+    # Проверяем обязательное поле mixed-port
+    if ! echo "$content" | grep -qE '^mixed-port:'; then
+        return 1
+    fi
+
+    return 0
 }
 
 # --- Проверка свободен ли порт ---
@@ -245,11 +249,13 @@ update_settings() {
 
     if [[ ! -f "$SETTINGS_FILE" ]]; then
         echo '{}' > "$SETTINGS_FILE"
+        chmod 600 "$SETTINGS_FILE"
     fi
 
     local tmp
     tmp=$(jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$SETTINGS_FILE")
-    echo "$tmp" > "$SETTINGS_FILE"
+    echo "$tmp" > "${SETTINGS_FILE}.tmp"
+    mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
 }
 
 read_settings() {
@@ -369,20 +375,8 @@ download_geo() {
     local geoip_ok=true
     local geosite_ok=true
 
-    download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat" &
-    local geoip_pid=$!
-    download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat" &
-    local geosite_pid=$!
-
-    if ! wait "$geoip_pid"; then
-        print_error "Не удалось скачать geoip.dat"
-        geoip_ok=false
-    fi
-
-    if ! wait "$geosite_pid"; then
-        print_error "Не удалось скачать geosite.dat"
-        geosite_ok=false
-    fi
+    download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat" || geoip_ok=false
+    download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat" || geosite_ok=false
 
     if $geoip_ok && $geosite_ok; then
         update_settings "last_geo_update" "$(date +%Y-%m-%d)"
@@ -481,6 +475,7 @@ require_root() {
     fi
 }
 
+# NOTE: Duplicated from installer. Keep in sync.
 read_settings() {
     local key="$1"
     if [[ -f "$SETTINGS_FILE" ]]; then
@@ -488,17 +483,21 @@ read_settings() {
     fi
 }
 
+# NOTE: Duplicated from installer. Keep in sync.
 update_settings() {
     local key="$1"
     local value="$2"
     if [[ ! -f "$SETTINGS_FILE" ]]; then
         echo '{}' > "$SETTINGS_FILE"
+        chmod 600 "$SETTINGS_FILE"
     fi
     local tmp
     tmp=$(jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$SETTINGS_FILE")
-    echo "$tmp" > "$SETTINGS_FILE"
+    echo "$tmp" > "${SETTINGS_FILE}.tmp"
+    mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
 }
 
+# NOTE: Duplicated from installer. Keep in sync.
 download_with_retry() {
     local url="$1"
     local output="$2"
@@ -514,6 +513,7 @@ download_with_retry() {
     return 1
 }
 
+# NOTE: Duplicated from installer. Keep in sync.
 verify_mihomo_checksum() {
     local version="$1"
     local filename="$2"
@@ -532,24 +532,34 @@ verify_mihomo_checksum() {
     fi
 }
 
+# NOTE: Duplicated from installer. Keep in sync.
 validate_yaml() {
     local content
-    content=$(head -c 1000 "$1" 2>/dev/null)
-    ! echo "$content" | grep -qiE '<!DOCTYPE|<html|<head' && echo "$content" | grep -qE '^[a-zA-Z_-]+:'
+    content=$(cat "$1" 2>/dev/null)
+    ! echo "$content" | head -c 1000 | grep -qiE '<!DOCTYPE|<html|<head' \
+        && echo "$content" | grep -qE '^[a-zA-Z_-]+:' \
+        && echo "$content" | grep -qE '^mixed-port:'
 }
 
+# NOTE: Duplicated from installer. Keep in sync.
 check_port_free() {
     ! ss -tlnp 2>/dev/null | grep -qE ":${1}\b"
 }
 
+# NOTE: Duplicated from installer. Keep in sync.
 find_free_port() {
     local port="$1"
     while ! check_port_free "$port"; do
         port=$((port + 1))
+        if [[ $port -gt 65535 ]]; then
+            print_error "Не удалось найти свободный порт" >&2
+            return 1
+        fi
     done
     echo "$port"
 }
 
+# NOTE: Duplicated from installer (returns port via echo, installer uses global var). Keep in sync.
 process_config() {
     local config="$1"
     local temp="${config}.processing"
@@ -566,7 +576,7 @@ process_config() {
         local new_port
         new_port=$(find_free_port "$port")
         sed -i "s/mixed-port: $port/mixed-port: $new_port/" "$temp"
-        print_warning "Порт $port занят, используется $new_port"
+        print_warning "Порт $port занят, используется $new_port" >&2
         port="$new_port"
     fi
 
@@ -626,6 +636,10 @@ do_update() {
         case "$arch" in
             x86_64)  arch="amd64" ;;
             aarch64) arch="arm64" ;;
+            *)
+                print_error "Неподдерживаемая архитектура: $arch"
+                return 1
+                ;;
         esac
         local filename="mihomo-linux-${arch}-${latest_version}.gz"
         local url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/${filename}"
@@ -833,7 +847,12 @@ case "${1:-help}" in
     check)           do_check ;;
     log)             do_log ;;
     uninstall)       do_uninstall ;;
-    help|*)          do_help ;;
+    help)            do_help ;;
+    *)
+        print_error "Неизвестная команда: $1"
+        do_help
+        exit 1
+        ;;
 esac
 ENDOFCLI
 
@@ -932,11 +951,10 @@ fi
 # Установка зависимостей
 install_dependencies
 
-# Создание директорий
-print_step "Создание директорий..."
+# Создание директории
+print_step "Создание директории..."
 mkdir -p "$DOSTUP_DIR"
-mkdir -p "$LOGS_DIR"
-print_success "Директории созданы"
+print_success "Директория создана"
 
 # Скачивание ядра
 if ! download_mihomo; then
