@@ -7,6 +7,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var toggleMenuItem: NSMenuItem!
+    private var restartMenuItem: NSMenuItem!
+    private var updateProvidersMenuItem: NSMenuItem!
     private var checkMenuItem: NSMenuItem!
     private var timer: Timer?
 
@@ -74,31 +76,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         toggleMenuItem.target = self
         menu.addItem(toggleMenuItem)
 
+        // Restart VPN
+        restartMenuItem = NSMenuItem(title: "\u{041F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0441}\u{0442}\u{0438}\u{0442}\u{044C}", action: #selector(restartVPN), keyEquivalent: "")
+        restartMenuItem.target = self
+        menu.addItem(restartMenuItem)
+
         menu.addItem(NSMenuItem.separator())
+
+        // Update providers
+        updateProvidersMenuItem = NSMenuItem(title: "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} \u{043F}\u{0440}\u{043E}\u{043A}\u{0441}\u{0438} \u{0438} \u{043F}\u{0440}\u{0430}\u{0432}\u{0438}\u{043B}\u{0430}", action: #selector(updateProviders), keyEquivalent: "")
+        updateProvidersMenuItem.target = self
+        menu.addItem(updateProvidersMenuItem)
 
         // Check access
         checkMenuItem = NSMenuItem(title: "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{0438}\u{0442}\u{044C} \u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}", action: #selector(checkAccess), keyEquivalent: "")
         checkMenuItem.target = self
         menu.addItem(checkMenuItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Update core
-        let updateCoreItem = NSMenuItem(title: "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} \u{044F}\u{0434}\u{0440}\u{043E}", action: #selector(updateCore), keyEquivalent: "")
-        updateCoreItem.target = self
-        menu.addItem(updateCoreItem)
-
-        // Update config
-        let updateConfigItem = NSMenuItem(title: "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} \u{043A}\u{043E}\u{043D}\u{0444}\u{0438}\u{0433}", action: #selector(updateConfig), keyEquivalent: "")
-        updateConfigItem.target = self
-        menu.addItem(updateConfigItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Quit (only the menu bar app, NOT the VPN)
-        let quitItem = NSMenuItem(title: "\u{0412}\u{044B}\u{0439}\u{0442}\u{0438}", action: #selector(quitApp), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
 
         statusItem.menu = menu
     }
@@ -126,6 +119,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Update menu items
+        restartMenuItem.isEnabled = running
+        updateProvidersMenuItem.isEnabled = running
         checkMenuItem.isEnabled = running
         if running {
             statusMenuItem.title = "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}"
@@ -212,20 +207,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func restartVPN() {
+        runInTerminal(argument: "restart")
+    }
+
+    @objc private func updateProviders() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let endpoints = [
+                ("Subscription", "http://127.0.0.1:9090/providers/proxies/Subscription"),
+                ("direct-rules", "http://127.0.0.1:9090/providers/rules/direct-rules"),
+                ("proxy-rules", "http://127.0.0.1:9090/providers/rules/proxy-rules")
+            ]
+            var allOk = true
+            let semaphore = DispatchSemaphore(value: 0)
+            for (_, urlStr) in endpoints {
+                var request = URLRequest(url: URL(string: urlStr)!)
+                request.httpMethod = "PUT"
+                request.timeoutInterval = 15
+                URLSession.shared.dataTask(with: request) { _, response, error in
+                    if let http = response as? HTTPURLResponse, (200...204).contains(http.statusCode) {
+                        // OK
+                    } else {
+                        allOk = false
+                    }
+                    semaphore.signal()
+                }.resume()
+                semaphore.wait()
+            }
+            DispatchQueue.main.async {
+                self?.showNotification(
+                    title: "Dostup VPN",
+                    text: allOk ? "\u{041F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{044B} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{044B}" : "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{0438}\u{044F} \u{043F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{043E}\u{0432}"
+                )
+            }
+        }
+    }
+
     @objc private func checkAccess() {
         runInTerminal(argument: "check")
-    }
-
-    @objc private func updateCore() {
-        runInTerminal(argument: "update-core")
-    }
-
-    @objc private func updateConfig() {
-        runInTerminal(argument: "update-config")
-    }
-
-    @objc private func quitApp() {
-        NSApplication.shared.terminate(nil)
     }
 
     // MARK: - Helpers
