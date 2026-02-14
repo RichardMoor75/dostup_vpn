@@ -206,7 +206,15 @@ if (Test-Path $SETTINGS_FILE) {
 $mihomoProcess = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
 if ($mihomoProcess) {
     Write-Step 'Stopping running Mihomo...'
-    Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    # Stop via service (if installed)
+    sc.exe stop DostupVPN 2>$null | Out-Null
+    Start-Sleep -Seconds 2
+    # Non-elevated kill (for Win 7/8 process mode)
+    Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
+    # Fallback: elevated taskkill (for older installations with elevated mihomo)
+    if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    }
     # Wait with timeout
     $stopTimeout = 10
     while ((Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) -and $stopTimeout -gt 0) {
@@ -230,6 +238,9 @@ if ($trayProcs) {
     Start-Sleep -Seconds 1
     Write-OK 'Tray application stopped'
 }
+
+# Delete old service if exists
+sc.exe delete DostupVPN 2>$null | Out-Null
 
 # Remove old installation
 if (Test-Path $DOSTUP_DIR) {
@@ -650,6 +661,12 @@ function Disable-SystemProxy {
     }
 }
 
+function Test-ServiceMode {
+    # Returns $true if the DostupVPN service is installed (regardless of running state)
+    $null = sc.exe query DostupVPN 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Update-Providers {
     Write-Host ''
     Write-Step 'Обновление провайдеров...'
@@ -720,8 +737,16 @@ function Test-SiteAccess {
 }
 
 function Stop-Mihomo {
-    Write-Step 'Остановка Mihomo (требуются права администратора)...'
-    Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    if (Test-ServiceMode) {
+        Write-Step 'Остановка Mihomo...'
+        sc.exe stop DostupVPN 2>$null | Out-Null
+    } elseif ([Environment]::OSVersion.Version.Major -lt 10) {
+        Write-Step 'Остановка Mihomo...'
+        Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Step 'Остановка Mihomo (требуются права администратора)...'
+        Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    }
     # Wait with timeout
     $stopTimeout = 10
     while ((Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) -and $stopTimeout -gt 0) {
@@ -840,7 +865,13 @@ function Start-Mihomo {
 
     Write-Step 'Запуск Mihomo...'
     Write-Host ''
-    Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+    if (Test-ServiceMode) {
+        sc.exe start DostupVPN 2>$null | Out-Null
+    } elseif ([Environment]::OSVersion.Version.Major -lt 10) {
+        Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -WindowStyle Hidden
+    } else {
+        Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+    }
     if (Wait-MihomoStart 5) {
         Enable-SystemProxy
         Write-Host ''
@@ -1074,6 +1105,12 @@ function Test-VpnRunning {
     return ($null -ne (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue))
 }
 
+function Test-ServiceMode {
+    # Returns $true if the DostupVPN service is installed (regardless of running state)
+    $null = sc.exe query DostupVPN 2>&1
+    return ($LASTEXITCODE -eq 0)
+}
+
 # Update UI based on mihomo status
 function Update-Status {
     if (Test-VpnRunning) {
@@ -1109,7 +1146,13 @@ $timer.Start()
 $miToggle.Add_Click({
     if (Test-VpnRunning) {
         try {
-            Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+            if (Test-ServiceMode) {
+                sc.exe stop DostupVPN 2>$null | Out-Null
+            } elseif ([Environment]::OSVersion.Version.Major -lt 10) {
+                Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
+            } else {
+                Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+            }
             $osVer = [Environment]::OSVersion.Version
             if ($osVer.Major -lt 10) {
                 $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
@@ -1123,7 +1166,13 @@ $miToggle.Add_Click({
         }
     } else {
         try {
-            Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+            if (Test-ServiceMode) {
+                sc.exe start DostupVPN 2>$null | Out-Null
+            } elseif ([Environment]::OSVersion.Version.Major -lt 10) {
+                Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -WindowStyle Hidden
+            } else {
+                Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+            }
             Start-Sleep -Seconds 3
             $osVer = [Environment]::OSVersion.Version
             if ($osVer.Major -lt 10) {
@@ -1212,28 +1261,129 @@ if (Test-Path $iconPath) {
 $trayLnk.Save()
 Write-OK 'Startup shortcut created'
 
-Write-Step 'Configuring firewall...'
+# Compile C# service wrapper (Win 10+ only)
+$serviceCreated = $false
+$osVersion = [Environment]::OSVersion.Version
+$svcExe = "$DOSTUP_DIR\DostupVPN-Service.exe"
+
+if ($osVersion.Major -ge 10) {
+    Write-Step 'Compiling service wrapper...'
+    $csPath = "$DOSTUP_DIR\DostupVPN-Service.cs"
+    $csSource = @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.ServiceProcess;
+
+public class DostupVPNService : ServiceBase
+{
+    private Process _mihomo;
+    private bool _stopping;
+
+    public DostupVPNService() { ServiceName = "DostupVPN"; CanStop = true; }
+
+    protected override void OnStart(string[] args)
+    {
+        string dir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+        string exe = Path.Combine(dir, "mihomo.exe");
+        string log = Path.Combine(dir, "logs", "mihomo.log");
+        Directory.CreateDirectory(Path.Combine(dir, "logs"));
+
+        _stopping = false;
+        _mihomo = new Process();
+        _mihomo.StartInfo.FileName = exe;
+        _mihomo.StartInfo.Arguments = "-d \"" + dir + "\"";
+        _mihomo.StartInfo.UseShellExecute = false;
+        _mihomo.StartInfo.RedirectStandardOutput = true;
+        _mihomo.StartInfo.RedirectStandardError = true;
+        _mihomo.StartInfo.CreateNoWindow = true;
+        _mihomo.EnableRaisingEvents = true;
+
+        var logStream = new StreamWriter(log, false) { AutoFlush = true };
+        _mihomo.OutputDataReceived += (s, e) => { if (e.Data != null) try { logStream.WriteLine(e.Data); } catch {} };
+        _mihomo.ErrorDataReceived += (s, e) => { if (e.Data != null) try { logStream.WriteLine(e.Data); } catch {} };
+        _mihomo.Exited += (s, e) => {
+            if (!_stopping) { try { logStream.Close(); } catch {} Environment.Exit(1); }
+        };
+
+        _mihomo.Start();
+        _mihomo.BeginOutputReadLine();
+        _mihomo.BeginErrorReadLine();
+    }
+
+    protected override void OnStop()
+    {
+        _stopping = true;
+        if (_mihomo != null && !_mihomo.HasExited)
+        {
+            _mihomo.Kill();
+            _mihomo.WaitForExit(5000);
+        }
+    }
+
+    public static void Main() { ServiceBase.Run(new DostupVPNService()); }
+}
+'@
+    [System.IO.File]::WriteAllText($csPath, $csSource, (New-Object System.Text.UTF8Encoding($false)))
+
+    $cscDir = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+    $cscExe = Join-Path $cscDir 'csc.exe'
+    if (Test-Path $cscExe) {
+        $svcDll = Join-Path $cscDir 'System.ServiceProcess.dll'
+        & $cscExe /nologo /target:exe /out:$svcExe /reference:$svcDll $csPath 2>$null
+        if (Test-Path $svcExe) {
+            Write-OK 'Service wrapper compiled'
+        } else {
+            Write-Info 'Service compilation failed, using fallback mode'
+        }
+    } else {
+        Write-Info 'csc.exe not found, using fallback mode'
+    }
+    Remove-Item $csPath -Force -ErrorAction SilentlyContinue
+}
+
+Write-Step 'Configuring firewall and service...'
 try {
-    # netsh requires admin rights - run all commands in one elevated cmd to avoid multiple UAC prompts
-    $fwCommands = @(
+    $elevatedCommands = @(
         "netsh advfirewall firewall delete rule name=all program=`"$MIHOMO_BIN`"",
         "netsh advfirewall firewall add rule name=`"Mihomo Proxy (Inbound)`" dir=in action=allow program=`"$MIHOMO_BIN`" enable=yes profile=any",
         "netsh advfirewall firewall add rule name=`"Mihomo Proxy (Outbound)`" dir=out action=allow program=`"$MIHOMO_BIN`" enable=yes profile=any"
-    ) -join ' & '
+    )
 
-    Start-Process -FilePath 'cmd' -ArgumentList "/c $fwCommands" -Verb RunAs -Wait -WindowStyle Hidden
+    if ($osVersion.Major -ge 10 -and (Test-Path $svcExe)) {
+        $sddl = 'D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;RPWPCR;;;IU)'
+        $elevatedCommands += @(
+            "sc.exe create DostupVPN binPath= `"\`"$svcExe\`"`" start= demand type= own",
+            "sc.exe sdset DostupVPN $sddl",
+            "sc.exe failure DostupVPN reset= 60 actions= restart/5000/restart/5000/restart/5000"
+        )
+    }
 
-    Write-OK 'Firewall configured'
+    $allCommands = $elevatedCommands -join ' & '
+    Start-Process -FilePath 'cmd' -ArgumentList "/c $allCommands" -Verb RunAs -Wait -WindowStyle Hidden
+
+    # Check if service was created
+    if ($osVersion.Major -ge 10) {
+        sc.exe query DostupVPN 2>$null | Out-Null
+        $serviceCreated = ($LASTEXITCODE -eq 0)
+    }
+
+    Write-OK 'Firewall and service configured'
 } catch {
     Write-Info 'Firewall: manual configuration may be needed'
 }
 
 Write-Step 'Starting Mihomo...'
 Write-Host ''
-Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+if ($serviceCreated) {
+    sc.exe start DostupVPN 2>$null | Out-Null
+} elseif ($osVersion.Major -lt 10) {
+    Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -WindowStyle Hidden
+} else {
+    Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+}
 if (Wait-MihomoStart 5) {
     # Enable system proxy for Windows < 10
-    $osVersion = [Environment]::OSVersion.Version
     if ($osVersion.Major -lt 10) {
         $proxyPort = 2080
         $cfgContent = Get-Content $CONFIG_FILE -Raw
