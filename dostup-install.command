@@ -1067,7 +1067,6 @@ import Cocoa
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem!
-    private var menu: NSMenu!
     private var statusMenuItem: NSMenuItem!
     private var toggleMenuItem: NSMenuItem!
     private var restartMenuItem: NSMenuItem!
@@ -1121,20 +1120,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 button.title = "VPN"
             }
-            button.action = #selector(statusBarClicked)
-            button.target = self
         }
     }
 
-    @objc private func statusBarClicked() {
-        updateStatus()
-        statusItem.menu = menu
-        statusItem.button?.performClick(nil)
-        statusItem.menu = nil
-    }
-
     private func setupMenu() {
-        menu = NSMenu()
+        let menu = NSMenu()
+        menu.autoenablesItems = false
 
         // Status line (disabled, info only)
         statusMenuItem = NSMenuItem(title: "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}", action: nil, keyEquivalent: "")
@@ -1165,6 +1156,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkMenuItem.target = self
         menu.addItem(checkMenuItem)
 
+        statusItem.menu = menu
     }
 
     // MARK: - Timer & Status
