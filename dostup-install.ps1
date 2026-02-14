@@ -1048,11 +1048,6 @@ $miUpdate.Text = 'Обновить прокси и правила'
 $miCheck = New-Object System.Windows.Forms.ToolStripMenuItem
 $miCheck.Text = 'Проверить доступ'
 
-$sep3 = New-Object System.Windows.Forms.ToolStripSeparator
-
-$miExit = New-Object System.Windows.Forms.ToolStripMenuItem
-$miExit.Text = 'Выход'
-
 [void]$cms.Items.Add($miStatus)
 [void]$cms.Items.Add($sep1)
 [void]$cms.Items.Add($miToggle)
@@ -1060,8 +1055,6 @@ $miExit.Text = 'Выход'
 [void]$cms.Items.Add($sep2)
 [void]$cms.Items.Add($miUpdate)
 [void]$cms.Items.Add($miCheck)
-[void]$cms.Items.Add($sep3)
-[void]$cms.Items.Add($miExit)
 
 $tray.ContextMenuStrip = $cms
 
@@ -1181,17 +1174,6 @@ $miUpdate.Add_Click({
 # Check access (opens terminal)
 $miCheck.Add_Click({
     Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$CONTROL_SCRIPT`" check"
-})
-
-# Exit
-$miExit.Add_Click({
-    $timer.Stop()
-    $timer.Dispose()
-    $tray.Visible = $false
-    $tray.Dispose()
-    $mutex.ReleaseMutex()
-    $mutex.Dispose()
-    [System.Windows.Forms.Application]::Exit()
 })
 
 [System.Windows.Forms.Application]::Run()
