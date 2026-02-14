@@ -48,7 +48,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 На Mac с установленным Xcode CLT (`swiftc`) автоматически создаётся приложение в строке меню:
 
 - Цветная иконка (зелёный кот) — VPN работает, серая — остановлен
-- Запуск / остановка VPN одним кликом (с запросом пароля администратора)
+- Запуск / остановка VPN одним кликом (без запроса пароля)
 - Проверка доступа, обновление ядра и конфига
 - Автозапуск при входе в систему (LaunchAgent)
 
@@ -59,9 +59,10 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 При установке автоматически создаётся приложение в области уведомлений (системный трей):
 
 - Цветная иконка (зелёный кот) — VPN работает, серая — остановлен
-- Запуск / остановка VPN одним кликом (с запросом прав администратора)
+- Запуск / остановка VPN одним кликом (без UAC)
 - Обновление прокси и правил, проверка доступа
 - Автозапуск при входе в Windows (ярлык в автозагрузке)
+- Автоперезапуск при краше (Windows Service)
 
 Также на рабочем столе создаётся ярлык **Dostup_VPN** с интерактивным меню.
 
@@ -92,12 +93,12 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 ### macOS
 - macOS 10.15+ (Catalina и новее)
-- Права администратора (для запуска Mihomo)
+- Права администратора (один раз при установке)
 
 ### Windows
 - Windows 7/8/10/11
 - PowerShell 3.0+ (встроен в Windows)
-- Права администратора
+- Права администратора (один раз при установке)
 
 ### Linux
 - Ubuntu / Debian (headless сервер)
@@ -124,6 +125,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ├── Dostup_VPN.command       # Скрипт управления (macOS)
 ├── Dostup_VPN.ps1           # Скрипт управления (Windows)
 ├── DostupVPN-Tray.ps1       # Tray-приложение (Windows)
+├── DostupVPN-Service.exe    # Windows Service обёртка (Win 10+)
 ├── icon_on.png              # Иконка трея: VPN работает (Windows)
 ├── icon_off.png             # Иконка трея: VPN остановлен (Windows)
 ├── statusbar/               # Menu bar приложение (macOS, если есть swiftc)
@@ -175,7 +177,8 @@ rm -rf ~/Desktop/Dostup_VPN.app
 
 ### Windows (PowerShell от администратора)
 ```powershell
-# Остановить VPN и tray-приложение
+# Остановить сервис, VPN и tray-приложение
+sc.exe stop DostupVPN 2>$null; sc.exe delete DostupVPN 2>$null
 Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
 Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" |
     Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } |

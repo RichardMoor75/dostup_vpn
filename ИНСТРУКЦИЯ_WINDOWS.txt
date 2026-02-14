@@ -27,10 +27,11 @@
    • Появится окно с запросом URL
    • Вставьте ссылку на подписку и нажмите OK
 
-ШАГ 5: Разрешите запуск от администратора
+ШАГ 5: Разрешите запуск от администратора (один раз)
 
    • Появится окно "Контроль учётных записей" (UAC)
-   • Нажмите "Да" — это нужно для настройки брандмауэра
+   • Нажмите "Да" — это нужно для настройки брандмауэра и сервиса
+   • Это единственный раз — дальше VPN включается/выключается без UAC
 
 ШАГ 6: Готово!
 
@@ -181,8 +182,9 @@ PPPoE подключения (Ростелеком, Дом.ру и др.) тре
 =====================================
      УДАЛЕНИЕ (если нужно)
 =====================================
-Откройте PowerShell и выполните по очереди:
+Откройте PowerShell ОТ АДМИНИСТРАТОРА и выполните по очереди:
 
+   sc.exe stop DostupVPN 2>$null; sc.exe delete DostupVPN 2>$null
    Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
    Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
    Remove-Item -Recurse -Force "$env:USERPROFILE\dostup"
