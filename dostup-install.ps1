@@ -997,13 +997,17 @@ $trayPs1 = @'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# Hide console window
+# DPI awareness + hide console window
 Add-Type -Name Win32 -Namespace Native -MemberDefinition @"
+[DllImport("user32.dll")]
+public static extern bool SetProcessDPIAware();
 [DllImport("kernel32.dll")]
 public static extern IntPtr GetConsoleWindow();
 [DllImport("user32.dll")]
 public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 "@
+[Native.Win32]::SetProcessDPIAware() | Out-Null
+[System.Windows.Forms.Application]::EnableVisualStyles()
 $consolePtr = [Native.Win32]::GetConsoleWindow()
 [Native.Win32]::ShowWindow($consolePtr, 0) | Out-Null
 
