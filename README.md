@@ -35,7 +35,8 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Запрашивает URL подписки (конфига) через GUI-диалог (на Linux — терминал)
 - Скачивает и валидирует конфиг (проверка YAML)
 - Скачивает geo-базы (geoip.dat, geosite.dat)
-- Создаёт ярлык `Dostup_VPN` на рабочем столе (на Linux — systemd-сервис + CLI `dostup`)
+- Создаёт иконку управления VPN (macOS — menu bar, Windows — системный трей, Linux — CLI `dostup`)
+- Создаёт ярлык `Dostup_VPN` на рабочем столе (macOS/Windows) и systemd-сервис (Linux)
 - Настраивает брандмауэр (macOS Application Firewall / Windows Firewall)
 - Защита от DNS-утечки: умная проверка и переключение DNS (macOS)
 - Запускает Mihomo
@@ -118,7 +119,8 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ├── geosite.dat              # База доменов
 ├── settings.json            # Настройки (URL подписки, версия)
 ├── sites.json               # Список сайтов для проверки доступа
-├── original_dns.conf        # Сохранённый DNS (создаётся при запуске, удаляется при остановке)
+├── icon.ico                 # Иконка для ярлыков (Windows)
+├── original_dns.conf        # Сохранённый DNS (macOS, создаётся при проверке доступа)
 ├── Dostup_VPN.command       # Скрипт управления (macOS)
 ├── Dostup_VPN.ps1           # Скрипт управления (Windows)
 ├── DostupVPN-Tray.ps1       # Tray-приложение (Windows)
