@@ -1334,10 +1334,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showNotification(title: String, text: String) {
+        // NSUserNotification (works when app is launched as bundle via 'open -a')
         let notification = NSUserNotification()
         notification.title = title
         notification.informativeText = text
         NSUserNotificationCenter.default.deliver(notification)
+
+        // Fallback: osascript (works for unsigned apps on all macOS versions)
+        let safeTitle = title.replacingOccurrences(of: "\"", with: "\\\"")
+        let safeText = text.replacingOccurrences(of: "\"", with: "\\\"")
+        DispatchQueue.global(qos: .utility).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e",
+                "display notification \"\(safeText)\" with title \"\(safeTitle)\""]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
+        }
     }
 }
 
@@ -1423,7 +1438,8 @@ create_launch_agent() {
 </plist>
 LAPLIST
 
-    # Загружаем LaunchAgent (RunAtLoad=true → запустится сразу и при логине)
+    # Перезагружаем LaunchAgent (unload старый → load новый)
+    launchctl unload "$plist_path" 2>/dev/null || true
     launchctl load "$plist_path" 2>/dev/null || true
 }
 
