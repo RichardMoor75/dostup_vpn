@@ -1064,7 +1064,7 @@ import Cocoa
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSUserNotificationCenterDelegate {
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
@@ -1073,7 +1073,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var updateProvidersMenuItem: NSMenuItem!
     private var checkMenuItem: NSMenuItem!
     private var timer: Timer?
-    private var isProcessing = false
 
     private var colorIcon: NSImage?
     private var grayIcon: NSImage?
@@ -1086,11 +1085,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Application Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSUserNotificationCenter.default.delegate = self
         loadIcons()
         setupStatusItem()
         setupMenu()
         startTimer()
         updateStatus()
+    }
+
+    func userNotificationCenter(_ center: NSUserNotificationCenter,
+                                shouldPresent notification: NSUserNotification) -> Bool {
+        return true
     }
 
     // MARK: - Icons
@@ -1156,7 +1161,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkMenuItem.target = self
         menu.addItem(checkMenuItem)
 
+        menu.delegate = self
         statusItem.menu = menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        updateStatus()
     }
 
     // MARK: - Timer & Status
@@ -1181,13 +1191,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Update menu items (don't re-enable while operation is in progress)
-        if !isProcessing {
-            toggleMenuItem.isEnabled = true
-            restartMenuItem.isEnabled = running
-            updateProvidersMenuItem.isEnabled = running
-            checkMenuItem.isEnabled = running
-        }
+        // Update menu items
+        restartMenuItem.isEnabled = running
+        updateProvidersMenuItem.isEnabled = running
+        checkMenuItem.isEnabled = running
         if running {
             statusMenuItem.title = "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}"
             toggleMenuItem.title = "\u{041E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} VPN"
@@ -1212,17 +1219,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    private func disableMenuActions() {
-        isProcessing = true
-        toggleMenuItem.isEnabled = false
-        restartMenuItem.isEnabled = false
-        updateProvidersMenuItem.isEnabled = false
-        checkMenuItem.isEnabled = false
-    }
-
     @objc private func toggleVPN() {
         let running = isMihomoRunning()
-        disableMenuActions()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
@@ -1248,7 +1246,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 task.waitUntilExit()
             } catch {
                 DispatchQueue.main.async {
-                    self.isProcessing = false
                     self.showNotification(title: "Dostup VPN",
                                           text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: \(error.localizedDescription)")
                     self.updateStatus()
@@ -1258,7 +1255,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if running {
                 DispatchQueue.main.async {
-                    self.isProcessing = false
                     self.showNotification(title: "Dostup VPN",
                                           text: "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}")
                     self.updateStatus()
@@ -1268,7 +1264,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 Thread.sleep(forTimeInterval: 5.0)
                 let started = self.isMihomoRunning()
                 DispatchQueue.main.async {
-                    self.isProcessing = false
                     if started {
                         self.showNotification(title: "Dostup VPN",
                                               text: "Dostup VPN \u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}")
@@ -1287,8 +1282,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func updateProviders() {
-        disableMenuActions()
-
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let endpoints = [
                 ("Subscription", "http://127.0.0.1:9090/providers/proxies/Subscription"),
@@ -1312,7 +1305,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 semaphore.wait()
             }
             DispatchQueue.main.async {
-                self?.isProcessing = false
                 self?.showNotification(
                     title: "Dostup VPN",
                     text: allOk ? "\u{041F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{044B} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{044B}" : "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{0438}\u{044F} \u{043F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{043E}\u{0432}"
