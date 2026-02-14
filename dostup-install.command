@@ -1422,11 +1422,8 @@ create_launch_agent() {
 </plist>
 LAPLIST
 
-    # Загружаем LaunchAgent (запустит при следующем логине)
+    # Загружаем LaunchAgent (RunAtLoad=true → запустится сразу и при логине)
     launchctl load "$plist_path" 2>/dev/null || true
-
-    # Запускаем сейчас
-    open -a "$app_full_path" 2>/dev/null || true
 }
 
 # Создание LaunchDaemon для mihomo (системный сервис)
@@ -1549,9 +1546,6 @@ start_mihomo() {
     # sudo ещё интерактивный при первой установке
     sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null
     sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null
-
-    # Лог-файл от текущего пользователя (launchd будет дописывать)
-    : > "$LOGS_DIR/mihomo.log"
 
     # Запуск через LaunchDaemon
     sudo launchctl start ru.dostup.vpn.mihomo
