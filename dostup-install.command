@@ -1064,9 +1064,10 @@ import Cocoa
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSUserNotificationCenterDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem!
+    private var menu: NSMenu!
     private var statusMenuItem: NSMenuItem!
     private var toggleMenuItem: NSMenuItem!
     private var restartMenuItem: NSMenuItem!
@@ -1085,17 +1086,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSUserNotifi
     // MARK: - Application Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSUserNotificationCenter.default.delegate = self
         loadIcons()
         setupStatusItem()
         setupMenu()
         startTimer()
         updateStatus()
-    }
-
-    func userNotificationCenter(_ center: NSUserNotificationCenter,
-                                shouldPresent notification: NSUserNotification) -> Bool {
-        return true
     }
 
     // MARK: - Icons
@@ -1126,11 +1121,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSUserNotifi
             } else {
                 button.title = "VPN"
             }
+            button.action = #selector(statusBarClicked)
+            button.target = self
         }
     }
 
+    @objc private func statusBarClicked() {
+        updateStatus()
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
     private func setupMenu() {
-        let menu = NSMenu()
+        menu = NSMenu()
 
         // Status line (disabled, info only)
         statusMenuItem = NSMenuItem(title: "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}", action: nil, keyEquivalent: "")
@@ -1161,12 +1165,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSUserNotifi
         checkMenuItem.target = self
         menu.addItem(checkMenuItem)
 
-        menu.delegate = self
-        statusItem.menu = menu
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        updateStatus()
     }
 
     // MARK: - Timer & Status
