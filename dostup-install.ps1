@@ -1330,11 +1330,12 @@ public class DostupVPNService : ServiceBase
     $cscExe = Join-Path $cscDir 'csc.exe'
     if (Test-Path $cscExe) {
         $svcDll = Join-Path $cscDir 'System.ServiceProcess.dll'
-        & $cscExe /nologo /target:exe /out:$svcExe /reference:$svcDll $csPath 2>$null
+        $cscOutput = & $cscExe /nologo /target:exe /out:$svcExe /reference:$svcDll $csPath 2>&1
         if (Test-Path $svcExe) {
             Write-OK 'Service wrapper compiled'
         } else {
-            Write-Info 'Service compilation failed, using fallback mode'
+            Write-Fail "Service compilation failed: $cscOutput"
+            Write-Info 'Using fallback mode (UAC on each toggle)'
         }
     } else {
         Write-Info 'csc.exe not found, using fallback mode'
@@ -1353,7 +1354,7 @@ try {
     if ($osVersion.Major -ge 10 -and (Test-Path $svcExe)) {
         $sddl = 'D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;RPWPCR;;;IU)'
         $elevatedCommands += @(
-            "sc.exe create DostupVPN binPath= `"\`"$svcExe\`"`" start= demand type= own",
+            "sc.exe create DostupVPN binPath= `"$svcExe`" start= demand type= own",
             "sc.exe sdset DostupVPN $sddl",
             "sc.exe failure DostupVPN reset= 60 actions= restart/5000/restart/5000/restart/5000"
         )
@@ -1368,7 +1369,11 @@ try {
         $serviceCreated = ($LASTEXITCODE -eq 0)
     }
 
-    Write-OK 'Firewall and service configured'
+    if ($serviceCreated) {
+        Write-OK 'Firewall and service configured (no UAC on toggle)'
+    } else {
+        Write-OK 'Firewall configured'
+    }
 } catch {
     Write-Info 'Firewall: manual configuration may be needed'
 }
