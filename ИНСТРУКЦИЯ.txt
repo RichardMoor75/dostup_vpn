@@ -50,10 +50,10 @@
    │  ● VPN работает                  │  ← Статус
    │─────────────────────────────────  │
    │  Остановить VPN                  │  ← Выключить VPN
+   │  Перезапустить                   │  ← Перезапустить
    │─────────────────────────────────  │
+   │  Обновить прокси и правила       │  ← Обновить провайдеры
    │  Проверить доступ                │  ← Тест: работает ли VPN?
-   │  Обновить ядро                   │  ← Обновить mihomo
-   │  Обновить конфиг                 │  ← Обновить подписку
    └───────────────────────────────────┘
 
    Иконка запускается автоматически при входе в систему.
@@ -139,8 +139,12 @@ https://metacubex.github.io/metacubexd/
 
    launchctl unload ~/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist 2>/dev/null
    rm -f ~/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist
-   pkill -f DostupVPN-StatusBar 2>/dev/null
-   sudo pkill mihomo
+   pkill -x DostupVPN-StatusBar 2>/dev/null
+   sudo launchctl stop ru.dostup.vpn.mihomo 2>/dev/null
+   sudo launchctl unload /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist 2>/dev/null
+   sudo rm -f /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist
+   sudo rm -f /etc/sudoers.d/dostup-vpn
+   sudo pkill mihomo 2>/dev/null
    rm -rf ~/dostup
    rm -rf ~/Desktop/Dostup_VPN.app
 

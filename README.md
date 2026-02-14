@@ -49,7 +49,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 - Цветная иконка (зелёный кот) — VPN работает, серая — остановлен
 - Запуск / остановка VPN одним кликом (без запроса пароля)
-- Проверка доступа, обновление ядра и конфига
+- Перезапуск, обновление прокси и правил, проверка доступа
 - Автозапуск при входе в систему (LaunchAgent)
 
 Если Xcode CLT не установлен — создаётся ярлык **Dostup_VPN** на рабочем столе.
@@ -166,11 +166,17 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 # Остановить menu bar app и LaunchAgent
 launchctl unload ~/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist 2>/dev/null
 rm -f ~/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist
-pkill -f DostupVPN-StatusBar 2>/dev/null
-# Восстановить DNS (если mihomo запущен)
+pkill -x DostupVPN-StatusBar 2>/dev/null
+# Остановить mihomo LaunchDaemon
+sudo launchctl stop ru.dostup.vpn.mihomo 2>/dev/null
+sudo launchctl unload /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist 2>/dev/null
+sudo rm -f /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist
+sudo rm -f /etc/sudoers.d/dostup-vpn
+# Восстановить DNS
 IFACE=$(route get default 2>/dev/null | awk '/interface:/{print $2}')
-sudo networksetup -setdnsservers "$(networksetup -listallhardwareports | grep -B1 "Device: $IFACE" | head -1 | sed 's/Hardware Port: //')" empty
-sudo pkill mihomo
+SERVICE=$(networksetup -listallhardwareports | grep -B1 "Device: $IFACE" | head -1 | sed 's/Hardware Port: //')
+sudo networksetup -setdnsservers "$SERVICE" empty 2>/dev/null
+sudo pkill mihomo 2>/dev/null
 rm -rf ~/dostup
 rm -rf ~/Desktop/Dostup_VPN.app
 ```
