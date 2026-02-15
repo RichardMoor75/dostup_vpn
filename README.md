@@ -36,7 +36,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Скачивает и валидирует конфиг (проверка YAML)
 - Скачивает geo-базы (geoip.dat, geosite.dat)
 - Создаёт иконку управления VPN (macOS — menu bar, Windows — системный трей, Linux — CLI `dostup`)
-- Создаёт ярлык `Dostup_VPN` на рабочем столе (macOS/Windows) и systemd-сервис (Linux)
+- Создаёт приложение `Dostup_VPN` (macOS — ~/Applications, Windows — ярлык на рабочем столе) и systemd-сервис (Linux)
 - Настраивает брандмауэр (macOS Application Firewall / Windows Firewall)
 - Защита от DNS-утечки: автопереключение DNS на 8.8.8.8/9.9.9.9 при старте VPN (macOS, Windows 10+)
 - Запускает Mihomo
@@ -51,9 +51,10 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Запуск / остановка VPN одним кликом (без запроса пароля)
 - Перезапуск, обновление прокси и правил, проверка доступа
 - «Выход» — остановка VPN и закрытие иконки
-- Автозапуск при входе в систему (LaunchAgent) и при старте VPN из ярлыка
+- Автозапуск при входе в систему (LaunchAgent) и при старте VPN из приложения
 
-Если Xcode CLT не установлен — создаётся ярлык **Dostup_VPN** на рабочем столе.
+Приложение **Dostup_VPN** устанавливается в `~/Applications` (доступно через Spotlight и Launchpad).
+Если Xcode CLT не установлен — только приложение Dostup_VPN (без иконки в menu bar).
 
 ### Windows — иконка в системном трее
 
@@ -70,7 +71,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 ### Все платформы
 
-На рабочем столе появится ярлык **Dostup_VPN** (macOS/Windows) или команда `dostup` (Linux). Запусти для:
+Приложение **Dostup_VPN** (macOS — Spotlight/Launchpad, Windows — ярлык на рабочем столе) или команда `dostup` (Linux). Запусти для:
 
 - Остановки VPN
 - Перезапуска VPN (с обновлением конфига и ядра)
@@ -182,7 +183,8 @@ SERVICE=$(networksetup -listallhardwareports | grep -B1 "Device: $IFACE" | head 
 sudo networksetup -setdnsservers "$SERVICE" empty 2>/dev/null
 sudo pkill mihomo 2>/dev/null
 rm -rf ~/dostup
-rm -rf ~/Desktop/Dostup_VPN.app
+rm -rf ~/Applications/Dostup_VPN.app
+rm -rf ~/Desktop/Dostup_VPN.app 2>/dev/null
 ```
 
 ### Windows (PowerShell от администратора)

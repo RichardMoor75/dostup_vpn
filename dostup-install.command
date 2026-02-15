@@ -980,17 +980,20 @@ download_icon() {
     return 0
 }
 
-# Создание .app bundle на рабочем столе
+# Создание .app bundle в ~/Applications
 create_desktop_shortcuts() {
-    print_step "Создание приложения на рабочем столе..."
+    print_step "Создание приложения в ~/Applications..."
 
-    local app_path="$DESKTOP_DIR/Dostup_VPN.app"
+    local apps_dir="$HOME/Applications"
+    mkdir -p "$apps_dir"
+    local app_path="$apps_dir/Dostup_VPN.app"
 
-    # Удаляем старые ярлыки если есть
+    # Удаляем старые ярлыки (рабочий стол — legacy, ~/Applications — текущий)
     rm -f "$DESKTOP_DIR/Dostup Start.command" 2>/dev/null
     rm -f "$DESKTOP_DIR/Dostup Stop.command" 2>/dev/null
     rm -f "$DESKTOP_DIR/Dostup_VPN.command" 2>/dev/null
     rm -rf "$DESKTOP_DIR/Dostup_VPN.app" 2>/dev/null
+    rm -rf "$apps_dir/Dostup_VPN.app" 2>/dev/null
 
     # Создаём структуру .app bundle
     mkdir -p "$app_path/Contents/MacOS"
@@ -1033,7 +1036,7 @@ LAUNCHER
 
     chmod +x "$app_path/Contents/MacOS/Dostup_VPN"
 
-    print_success "Приложение Dostup_VPN создано на рабочем столе"
+    print_success "Приложение Dostup_VPN создано в ~/Applications"
 }
 
 # Создание menu bar приложения
@@ -1615,8 +1618,8 @@ https://metacubex.github.io/metacubexd/
 
 API: 127.0.0.1:9090
 
-На рабочем столе создан ярлык:
-• Dostup_VPN — запуск/остановка/перезапуск${statusbar_msg}" buttons {"OK"} default button 1 with title "Dostup"
+Приложение Dostup_VPN в ~/Applications
+(доступно через Spotlight и Launchpad)${statusbar_msg}" buttons {"OK"} default button 1 with title "Dostup"
 EOF
 }
 
@@ -1776,8 +1779,8 @@ if start_mihomo; then
     echo "Панель управления: https://metacubex.github.io/metacubexd/"
     echo "API: 127.0.0.1:9090"
     echo ""
-    echo "Ярлык на рабочем столе:"
-    echo "  • Dostup_VPN — запуск/остановка/перезапуск"
+    echo "Приложение Dostup_VPN в ~/Applications"
+    echo "  (доступно через Spotlight и Launchpad)"
     if [[ -d "$DOSTUP_DIR/statusbar/DostupVPN-StatusBar.app" ]]; then
         echo "  • Иконка в menu bar (автозапуск при логине)"
     fi

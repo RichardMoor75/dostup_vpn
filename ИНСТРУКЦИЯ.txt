@@ -32,7 +32,7 @@
 
    Если установлен Xcode CLT — в строке меню (рядом с часами)
    появится иконка кота для управления VPN.
-   Также на рабочем столе будет иконка "Dostup_VPN".
+   Приложение "Dostup_VPN" доступно через Spotlight и Launchpad.
 
 =====================================
        КАК ПОЛЬЗОВАТЬСЯ
@@ -59,13 +59,13 @@
    └───────────────────────────────────┘
 
    Иконка запускается автоматически при входе в систему.
-   Также запускается при старте VPN через ярлык на рабочем столе.
+   Также запускается при старте VPN через приложение Dostup_VPN.
 
 -------------------------------------
-ЯРЛЫК НА РАБОЧЕМ СТОЛЕ (альтернатива)
+ПРИЛОЖЕНИЕ DOSTUP_VPN (альтернатива)
 -------------------------------------
 
-Дважды кликните на "Dostup_VPN" на рабочем столе.
+Найдите "Dostup_VPN" через Spotlight (Cmd+Space) или Launchpad.
 Появится меню с выбором действия:
 
    ┌─────────────────────────────────┐
@@ -170,5 +170,6 @@ https://metacubex.github.io/metacubexd/
    sudo networksetup -setdnsservers "$SERVICE" empty 2>/dev/null
    sudo pkill mihomo 2>/dev/null
    rm -rf ~/dostup
-   rm -rf ~/Desktop/Dostup_VPN.app
+   rm -rf ~/Applications/Dostup_VPN.app
+   rm -rf ~/Desktop/Dostup_VPN.app 2>/dev/null
 
