@@ -675,6 +675,7 @@ function Update-Providers {
     try {
         $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
         foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+            if ($name -eq 'default') { continue }
             try {
                 Invoke-WebRequest -Uri "$api/providers/proxies/$name" -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
                 Write-OK "Прокси ($name) — обновлено"
@@ -1337,6 +1338,7 @@ $miUpdate.Add_Click({
         try {
             $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
             foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+                if ($name -eq 'default') { continue }
                 try {
                     Invoke-WebRequest -Uri "$api/providers/proxies/$name" -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
                 } catch { $errors++ }
