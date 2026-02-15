@@ -38,7 +38,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Создаёт иконку управления VPN (macOS — menu bar, Windows — системный трей, Linux — CLI `dostup`)
 - Создаёт ярлык `Dostup_VPN` на рабочем столе (macOS/Windows) и systemd-сервис (Linux)
 - Настраивает брандмауэр (macOS Application Firewall / Windows Firewall)
-- Защита от DNS-утечки: умная проверка и переключение DNS (macOS)
+- Защита от DNS-утечки: автопереключение DNS на 8.8.8.8/9.9.9.9 при старте VPN (macOS, Windows 10+)
 - Запускает Mihomo
 
 ## Управление
@@ -121,7 +121,9 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ├── settings.json            # Настройки (URL подписки, версия)
 ├── sites.json               # Список сайтов для проверки доступа
 ├── icon.ico                 # Иконка для ярлыков (Windows)
-├── original_dns.conf        # Сохранённый DNS (macOS, создаётся при проверке доступа)
+├── original_dns.conf        # Сохранённый DNS (macOS, создаётся при запуске VPN)
+├── original_dns.json        # Сохранённый DNS (Windows 10+, создаётся при запуске VPN)
+├── dns-helper.ps1           # DNS-переключатель (Windows 10+)
 ├── Dostup_VPN.command       # Скрипт управления (macOS)
 ├── Dostup_VPN.ps1           # Скрипт управления (Windows)
 ├── DostupVPN-Tray.ps1       # Tray-приложение (Windows)
@@ -189,6 +191,8 @@ Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
 Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" |
     Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+# Восстановить DNS (Win 10+)
+powershell -ExecutionPolicy Bypass -NoProfile -File "$env:USERPROFILE\dostup\dns-helper.ps1" restore 2>$null
 # Удалить файлы и ярлыки
 Remove-Item -Recurse -Force "$env:USERPROFILE\dostup"
 Remove-Item "$env:USERPROFILE\Desktop\Dostup_VPN.lnk" -ErrorAction SilentlyContinue

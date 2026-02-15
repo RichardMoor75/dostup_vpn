@@ -96,6 +96,26 @@
    и добавьте/удалите нужные сайты.
 
 -------------------------------------
+ЗАЩИТА ОТ УТЕЧКИ DNS (Windows 10+)
+-------------------------------------
+При запуске VPN система автоматически переключает DNS
+на публичные серверы Google (8.8.8.8 / 9.9.9.9).
+При остановке VPN — DNS восстанавливается обратно.
+
+Зачем это нужно:
+   Windows отправляет DNS-запросы через все сетевые адаптеры
+   одновременно (Smart Multi-Homed Name Resolution).
+   Без переключения DNS запросы могут утекать мимо VPN.
+
+Это происходит автоматически:
+   • При запуске/остановке через трей, ярлык или сервис
+   • При аварийном завершении — DNS восстановится при
+     следующем запуске скрипта (crash recovery)
+
+На Windows 7/8/8.1 DNS не переключается — VPN работает
+через системный прокси, а не TUN.
+
+-------------------------------------
 ПАНЕЛЬ УПРАВЛЕНИЯ (для продвинутых)
 -------------------------------------
 Откройте в браузере:
@@ -187,6 +207,7 @@ PPPoE подключения (Ростелеком, Дом.ру и др.) тре
    sc.exe stop DostupVPN 2>$null; sc.exe delete DostupVPN 2>$null
    Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
    Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+   powershell -ExecutionPolicy Bypass -NoProfile -File "$env:USERPROFILE\dostup\dns-helper.ps1" restore 2>$null
    Remove-Item -Recurse -Force "$env:USERPROFILE\dostup"
    Remove-Item "$env:USERPROFILE\Desktop\Dostup_VPN.lnk" -ErrorAction SilentlyContinue
    Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\DostupVPN-Tray.lnk" -ErrorAction SilentlyContinue
