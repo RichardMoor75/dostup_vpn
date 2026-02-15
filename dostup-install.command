@@ -871,6 +871,11 @@ fi
 
 check_dns_recovery
 
+# Если mihomo работает, но DNS ещё не переключён — переключить
+if [[ ! -f "$DNS_CONF" ]] && pgrep -x "mihomo" > /dev/null; then
+    save_and_set_mihomo_dns
+fi
+
 echo ""
 echo -e "${BLUE}=== Dostup VPN ===${NC}"
 echo ""
