@@ -519,9 +519,9 @@ save_and_set_mihomo_dns() {
         echo "$current_dns" >> "$DNS_CONF"
     fi
 
-    # Устанавливаем DNS на mihomo fake-ip
-    sudo -n networksetup -setdnsservers "$service" 198.18.0.1
-    echo -e "${GREEN}✓ DNS переключён на Mihomo (198.18.0.1)${NC}"
+    # Устанавливаем публичные DNS (fail-safe: работают и через TUN, и напрямую)
+    sudo -n networksetup -setdnsservers "$service" 8.8.8.8 9.9.9.9
+    echo -e "${GREEN}✓ DNS переключён на 8.8.8.8 / 9.9.9.9${NC}"
 }
 
 restore_original_dns() {
@@ -622,32 +622,14 @@ do_check_access() {
         echo -e "${RED}  Недоступно: ${failed}/${_check_total}${NC}"
     done
 
-    # --- Подтверждено: доступа нет — пробуем переключить DNS ---
+    # --- Подтверждено: доступа нет ---
     echo ""
-    echo -e "${YELLOW}▶ Пробую переключить DNS на Mihomo...${NC}"
-    save_and_set_mihomo_dns
-
-    for attempt in 1 2 3; do
-        sleep 3
-        echo ""
-        echo -e "${YELLOW}▶ Проверка после DNS-переключения ($attempt/3)...${NC}"
-        echo ""
-        _check_sites verbose
-        echo ""
-        failed=$((_check_total - _check_ok))
-        if [[ $failed -le $threshold ]]; then
-            echo -e "${GREEN}✓ DNS-переключение помогло! Доступ восстановлен${NC}"
-            return 0
-        fi
-    done
-
-    # --- DNS не помог — возвращаем обратно ---
-    echo -e "${RED}✗ Переключение DNS не помогло, возвращаю настройки...${NC}"
-    restore_original_dns
+    echo -e "${RED}✗ Большинство ресурсов недоступно (${failed}/${_check_total})${NC}"
     echo ""
     echo "Возможные причины:"
     echo "  • Конфиг некорректный или подписка истекла"
     echo "  • Сеть блокирует VPN-трафик"
+    echo "  • Mihomo не запущен"
     return 1
 }
 
@@ -742,6 +724,7 @@ do_start_quick() {
     sleep 4
 
     if pgrep -x "mihomo" > /dev/null; then
+        save_and_set_mihomo_dns
         return 0
     else
         return 1
@@ -795,6 +778,7 @@ do_start() {
     sleep 4
 
     if pgrep -x "mihomo" > /dev/null; then
+        save_and_set_mihomo_dns
         echo ""
         echo -e "${GREEN}============================================${NC}"
         echo -e "${GREEN}✓ Mihomo успешно запущен!${NC}"
@@ -872,6 +856,10 @@ if [[ -n "$1" ]]; then
             ;;
         status)
             if pgrep -x "mihomo" > /dev/null; then echo "running"; else echo "stopped"; fi
+            exit 0
+            ;;
+        dns-set)
+            save_and_set_mihomo_dns
             exit 0
             ;;
         *)
@@ -1253,6 +1241,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // Mihomo нужно время на запуск — ждём 5 сек и проверяем
                 Thread.sleep(forTimeInterval: 5.0)
                 let started = self.isMihomoRunning()
+                if started {
+                    // Переключаем DNS на публичные (fail-safe)
+                    let dnsTask = Process()
+                    dnsTask.executableURL = URL(fileURLWithPath: "/bin/bash")
+                    let ePath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
+                    dnsTask.arguments = ["-c", "'" + ePath + "' dns-set"]
+                    dnsTask.standardOutput = FileHandle.nullDevice
+                    dnsTask.standardError = FileHandle.nullDevice
+                    try? dnsTask.run()
+                    dnsTask.waitUntilExit()
+                }
                 DispatchQueue.main.async {
                     if started {
                         self.showNotification(title: "Dostup VPN",

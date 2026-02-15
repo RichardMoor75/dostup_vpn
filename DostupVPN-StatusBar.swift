@@ -63,6 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMenu() {
         let menu = NSMenu()
+        menu.autoenablesItems = false
 
         // Status line (disabled, info only)
         statusMenuItem = NSMenuItem(title: "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}", action: nil, keyEquivalent: "")
@@ -164,9 +165,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let eBin = mihomoBin.replacingOccurrences(of: "'", with: "'\\''")
                 let eDir = dostupDir.replacingOccurrences(of: "'", with: "'\\''")
                 let eLog = logFile.replacingOccurrences(of: "'", with: "'\\''")
+                let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
                 shellCommand = "/usr/libexec/ApplicationFirewall/socketfilterfw --add '\(eBin)' 2>/dev/null; " +
                     "/usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp '\(eBin)' 2>/dev/null; " +
-                    "'\(eBin)' -d '\(eDir)' > '\(eLog)' 2>&1 &"
+                    "'\(eBin)' -d '\(eDir)' > '\(eLog)' 2>&1 & " +
+                    "sleep 4; bash '\(escapedPath)' dns-set"
             }
             let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
             var errorDict: NSDictionary? = nil
