@@ -288,7 +288,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func healthcheckProviders() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let api = "http://127.0.0.1:9090"
-            var allOk = true
+            var summaryLines: [String] = []
+            var hasErrors = false
             let semaphore = DispatchSemaphore(value: 0)
 
             if let url = URL(string: "\(api)/providers/proxies"),
@@ -297,25 +298,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                let providers = json["providers"] as? [String: Any] {
                 for name in providers.keys {
                     let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+                    // Run healthcheck
                     var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)/healthcheck")!)
                     request.httpMethod = "GET"
                     request.timeoutInterval = 30
-                    URLSession.shared.dataTask(with: request) { _, response, _ in
-                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
-                            allOk = false
-                        }
+                    URLSession.shared.dataTask(with: request) { _, _, _ in
                         semaphore.signal()
                     }.resume()
                     semaphore.wait()
+
+                    // Get detailed results
+                    if let detailUrl = URL(string: "\(api)/providers/proxies/\(encoded)"),
+                       let detailData = try? Data(contentsOf: detailUrl),
+                       let detailJson = try? JSONSerialization.jsonObject(with: detailData) as? [String: Any],
+                       let proxies = detailJson["proxies"] as? [[String: Any]] {
+                        var alive = 0
+                        var totalDelay = 0
+                        let total = proxies.count
+                        for proxy in proxies {
+                            if let history = proxy["history"] as? [[String: Any]],
+                               let last = history.last,
+                               let delay = last["delay"] as? Int,
+                               delay > 0 {
+                                alive += 1
+                                totalDelay += delay
+                            }
+                        }
+                        let avg = alive > 0 ? totalDelay / alive : 0
+                        if alive > 0 {
+                            summaryLines.append("\(name): \(alive)/\(total) (avg \(avg)ms)")
+                        } else {
+                            summaryLines.append("\(name): 0/\(total)")
+                            hasErrors = true
+                        }
+                    } else {
+                        summaryLines.append("\(name): \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}")
+                        hasErrors = true
+                    }
                 }
             } else {
-                allOk = false
+                hasErrors = true
+                summaryLines.append("\u{041D}\u{0435}\u{0442} \u{0434}\u{0430}\u{043D}\u{043D}\u{044B}\u{0445}")
             }
 
+            let text = summaryLines.joined(separator: "\n")
             DispatchQueue.main.async {
                 self?.showNotification(
-                    title: "Dostup VPN",
-                    text: allOk ? "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0430} \u{0437}\u{0430}\u{0432}\u{0435}\u{0440}\u{0448}\u{0435}\u{043D}\u{0430}" : "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430} \u{043F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0438} \u{043D}\u{043E}\u{0434}"
+                    title: "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0430} \u{043D}\u{043E}\u{0434}",
+                    text: text
                 )
             }
         }

@@ -714,12 +714,46 @@ function Invoke-Healthcheck {
     try {
         $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
         foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+            # Run healthcheck
             try {
                 Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 30 | Out-Null
-                Write-OK "$name — проверено"
             } catch {
-                Write-Fail "$name — ошибка: $_"
+                Write-Fail "$name — ошибка healthcheck: $_"
+                continue
             }
+
+            # Get detailed results
+            Write-Host "[$name]" -ForegroundColor Cyan
+            try {
+                $details = Invoke-WebRequest -Uri "$api/providers/proxies/$name" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+                $alive = 0
+                $total = 0
+                $totalDelay = 0
+                foreach ($proxy in $details.proxies) {
+                    $total++
+                    $history = $proxy.history
+                    $delay = 0
+                    if ($history -and $history.Count -gt 0) {
+                        $delay = $history[-1].delay
+                    }
+                    if ($delay -gt 0) {
+                        $alive++
+                        $totalDelay += $delay
+                        Write-Host "  [OK] $($proxy.name) — ${delay}ms" -ForegroundColor Green
+                    } else {
+                        Write-Host "  [FAIL] $($proxy.name) — мёртв" -ForegroundColor Red
+                    }
+                }
+                $avg = if ($alive -gt 0) { [math]::Round($totalDelay / $alive) } else { 0 }
+                if ($alive -gt 0) {
+                    Write-Host "  Итого: $alive/$total нод (avg ${avg}ms)" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  Итого: 0/$total нод" -ForegroundColor Red
+                }
+            } catch {
+                Write-Fail "  Не удалось получить данные: $_"
+            }
+            Write-Host ''
         }
     } catch {
         Write-Fail "Не удалось получить список провайдеров: $_"
@@ -1333,17 +1367,36 @@ $miHealthcheck.Add_Click({
     try {
         $api = 'http://127.0.0.1:9090'
         $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
-        $errors = 0
+        $summaryLines = @()
+        $hasErrors = $false
         foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
             try {
                 Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 30 | Out-Null
-            } catch { $errors++ }
+            } catch { $hasErrors = $true; continue }
+
+            try {
+                $details = Invoke-WebRequest -Uri "$api/providers/proxies/$name" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+                $alive = 0; $total = 0; $totalDelay = 0
+                foreach ($proxy in $details.proxies) {
+                    $total++
+                    $delay = 0
+                    if ($proxy.history -and $proxy.history.Count -gt 0) {
+                        $delay = $proxy.history[-1].delay
+                    }
+                    if ($delay -gt 0) { $alive++; $totalDelay += $delay }
+                }
+                $avg = if ($alive -gt 0) { [math]::Round($totalDelay / $alive) } else { 0 }
+                if ($alive -gt 0) {
+                    $summaryLines += "${name}: ${alive}/${total} (avg ${avg}ms)"
+                } else {
+                    $summaryLines += "${name}: 0/${total}"
+                    $hasErrors = $true
+                }
+            } catch { $summaryLines += "${name}: ошибка"; $hasErrors = $true }
         }
-        if ($errors -eq 0) {
-            $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Проверка завершена', [System.Windows.Forms.ToolTipIcon]::Info)
-        } else {
-            $tray.ShowBalloonTip(3000, 'Dostup VPN', "Проверка с ошибками ($errors)", [System.Windows.Forms.ToolTipIcon]::Warning)
-        }
+        $msg = $summaryLines -join "`n"
+        $icon = if ($hasErrors) { [System.Windows.Forms.ToolTipIcon]::Warning } else { [System.Windows.Forms.ToolTipIcon]::Info }
+        $tray.ShowBalloonTip(5000, 'Проверка нод', $msg, $icon)
     } catch {
         $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Ошибка проверки нод', [System.Windows.Forms.ToolTipIcon]::Error)
     }

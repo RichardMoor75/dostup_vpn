@@ -869,22 +869,47 @@ if [[ -n "$1" ]]; then
             ;;
         healthcheck)
             echo "Проверка нод..."
+            echo ""
             proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys()]" 2>/dev/null)
             if [ -n "$proxy_providers" ]; then
                 while IFS= read -r name; do
-                    result=$(curl -s --max-time 30 "http://127.0.0.1:9090/providers/proxies/$name/healthcheck")
-                    if [ $? -eq 0 ]; then
-                        echo "✓ $name — проверено"
+                    # Run healthcheck
+                    curl -s --max-time 30 "http://127.0.0.1:9090/providers/proxies/$name/healthcheck" > /dev/null 2>&1
+                    # Get detailed results
+                    echo "[$name]"
+                    details=$(curl -s --max-time 5 "http://127.0.0.1:9090/providers/proxies/$name")
+                    if [ -n "$details" ]; then
+                        echo "$details" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    proxies = data.get('proxies', [])
+    alive = 0
+    total = 0
+    for p in proxies:
+        name = p.get('name', '?')
+        history = p.get('history', [])
+        delay = history[-1]['delay'] if history else 0
+        total += 1
+        if delay > 0:
+            alive += 1
+            print(f'  ✓ {name} — {delay}ms')
+        else:
+            print(f'  ✗ {name} — мёртв')
+    print(f'  Итого: {alive}/{total} нод')
+except:
+    print('  ✗ Ошибка парсинга')
+" 2>/dev/null
                     else
-                        echo "✗ $name — ошибка"
+                        echo "  ✗ Не удалось получить данные"
                     fi
+                    echo ""
                 done <<< "$proxy_providers"
             else
                 echo "✗ Не удалось получить список провайдеров"
             fi
-            echo ""
-            echo "Окно закроется через 3 секунды..."
-            sleep 3
+            echo "Окно закроется через 5 секунд..."
+            sleep 5
             close_terminal_window
             exit 0
             ;;
@@ -977,22 +1002,47 @@ if pgrep -x "mihomo" > /dev/null; then
         4)
             echo ""
             echo "Проверка нод..."
+            echo ""
             proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys()]" 2>/dev/null)
             if [ -n "$proxy_providers" ]; then
                 while IFS= read -r name; do
-                    result=$(curl -s --max-time 30 "http://127.0.0.1:9090/providers/proxies/$name/healthcheck")
-                    if [ $? -eq 0 ]; then
-                        echo "✓ $name — проверено"
+                    # Run healthcheck
+                    curl -s --max-time 30 "http://127.0.0.1:9090/providers/proxies/$name/healthcheck" > /dev/null 2>&1
+                    # Get detailed results
+                    echo "[$name]"
+                    details=$(curl -s --max-time 5 "http://127.0.0.1:9090/providers/proxies/$name")
+                    if [ -n "$details" ]; then
+                        echo "$details" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    proxies = data.get('proxies', [])
+    alive = 0
+    total = 0
+    for p in proxies:
+        name = p.get('name', '?')
+        history = p.get('history', [])
+        delay = history[-1]['delay'] if history else 0
+        total += 1
+        if delay > 0:
+            alive += 1
+            print(f'  ✓ {name} — {delay}ms')
+        else:
+            print(f'  ✗ {name} — мёртв')
+    print(f'  Итого: {alive}/{total} нод')
+except:
+    print('  ✗ Ошибка парсинга')
+" 2>/dev/null
                     else
-                        echo "✗ $name — ошибка"
+                        echo "  ✗ Не удалось получить данные"
                     fi
+                    echo ""
                 done <<< "$proxy_providers"
             else
                 echo "✗ Не удалось получить список провайдеров"
             fi
-            echo ""
-            echo "Окно закроется через 3 секунды..."
-            sleep 3
+            echo "Окно закроется через 5 секунд..."
+            sleep 5
             close_terminal_window
             exit 0
             ;;
@@ -1427,7 +1477,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func healthcheckProviders() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let api = "http://127.0.0.1:9090"
-            var allOk = true
+            var summaryLines: [String] = []
+            var hasErrors = false
             let semaphore = DispatchSemaphore(value: 0)
 
             if let url = URL(string: "\(api)/providers/proxies"),
@@ -1436,25 +1487,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                let providers = json["providers"] as? [String: Any] {
                 for name in providers.keys {
                     let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+                    // Run healthcheck
                     var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)/healthcheck")!)
                     request.httpMethod = "GET"
                     request.timeoutInterval = 30
-                    URLSession.shared.dataTask(with: request) { _, response, _ in
-                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
-                            allOk = false
-                        }
+                    URLSession.shared.dataTask(with: request) { _, _, _ in
                         semaphore.signal()
                     }.resume()
                     semaphore.wait()
+
+                    // Get detailed results
+                    if let detailUrl = URL(string: "\(api)/providers/proxies/\(encoded)"),
+                       let detailData = try? Data(contentsOf: detailUrl),
+                       let detailJson = try? JSONSerialization.jsonObject(with: detailData) as? [String: Any],
+                       let proxies = detailJson["proxies"] as? [[String: Any]] {
+                        var alive = 0
+                        var totalDelay = 0
+                        let total = proxies.count
+                        for proxy in proxies {
+                            if let history = proxy["history"] as? [[String: Any]],
+                               let last = history.last,
+                               let delay = last["delay"] as? Int,
+                               delay > 0 {
+                                alive += 1
+                                totalDelay += delay
+                            }
+                        }
+                        let avg = alive > 0 ? totalDelay / alive : 0
+                        if alive > 0 {
+                            summaryLines.append("\(name): \(alive)/\(total) (avg \(avg)ms)")
+                        } else {
+                            summaryLines.append("\(name): 0/\(total)")
+                            hasErrors = true
+                        }
+                    } else {
+                        summaryLines.append("\(name): \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}")
+                        hasErrors = true
+                    }
                 }
             } else {
-                allOk = false
+                hasErrors = true
+                summaryLines.append("\u{041D}\u{0435}\u{0442} \u{0434}\u{0430}\u{043D}\u{043D}\u{044B}\u{0445}")
             }
 
+            let text = summaryLines.joined(separator: "\n")
             DispatchQueue.main.async {
                 self?.showNotification(
-                    title: "Dostup VPN",
-                    text: allOk ? "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0430} \u{0437}\u{0430}\u{0432}\u{0435}\u{0440}\u{0448}\u{0435}\u{043D}\u{0430}" : "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430} \u{043F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0438} \u{043D}\u{043E}\u{0434}"
+                    title: "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0430} \u{043D}\u{043E}\u{0434}",
+                    text: text
                 )
             }
         }
