@@ -714,6 +714,7 @@ function Invoke-Healthcheck {
     try {
         $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
         foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+            if ($name -eq 'default') { continue }
             # Run healthcheck
             try {
                 Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 30 | Out-Null
@@ -1370,6 +1371,7 @@ $miHealthcheck.Add_Click({
         $summaryLines = @()
         $hasErrors = $false
         foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+            if ($name -eq 'default') { continue }
             try {
                 Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 30 | Out-Null
             } catch { $hasErrors = $true; continue }

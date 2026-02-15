@@ -870,7 +870,7 @@ if [[ -n "$1" ]]; then
         healthcheck)
             echo "Проверка нод..."
             echo ""
-            proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys()]" 2>/dev/null)
+            proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys() if k != 'default']" 2>/dev/null)
             if [ -n "$proxy_providers" ]; then
                 while IFS= read -r name; do
                     # Run healthcheck
@@ -1003,7 +1003,7 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Проверка нод..."
             echo ""
-            proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys()]" 2>/dev/null)
+            proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys() if k != 'default']" 2>/dev/null)
             if [ -n "$proxy_providers" ]; then
                 while IFS= read -r name; do
                     # Run healthcheck
@@ -1485,7 +1485,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                let data = try? Data(contentsOf: url),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let providers = json["providers"] as? [String: Any] {
-                for name in providers.keys {
+                for name in providers.keys where name != "default" {
                     let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
                     // Run healthcheck
                     var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)/healthcheck")!)

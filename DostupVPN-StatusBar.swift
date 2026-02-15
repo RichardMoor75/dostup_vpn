@@ -239,7 +239,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                let data = try? Data(contentsOf: url),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let providers = json["providers"] as? [String: Any] {
-                for name in providers.keys {
+                for name in providers.keys where name != "default" {
                     let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
                     var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)")!)
                     request.httpMethod = "PUT"
@@ -261,7 +261,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                let data = try? Data(contentsOf: url),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let providers = json["providers"] as? [String: Any] {
-                for name in providers.keys {
+                for name in providers.keys where name != "default" {
                     let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
                     var request = URLRequest(url: URL(string: "\(api)/providers/rules/\(encoded)")!)
                     request.httpMethod = "PUT"
@@ -296,7 +296,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                let data = try? Data(contentsOf: url),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let providers = json["providers"] as? [String: Any] {
-                for name in providers.keys {
+                for name in providers.keys where name != "default" {
                     let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
                     // Run healthcheck
                     var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)/healthcheck")!)
