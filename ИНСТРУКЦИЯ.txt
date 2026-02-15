@@ -91,6 +91,23 @@
    и добавьте/удалите нужные сайты.
 
 -------------------------------------
+ЗАЩИТА ОТ УТЕЧКИ DNS
+-------------------------------------
+При запуске VPN система автоматически переключает DNS
+на публичные серверы Google (8.8.8.8 / 9.9.9.9).
+При остановке VPN — DNS восстанавливается обратно.
+
+Зачем это нужно:
+   В режиме TUN локальный DNS (выданный роутером по DHCP)
+   может не перехватываться — запросы утекают мимо VPN.
+   Публичные DNS работают и через TUN, и напрямую (fail-safe).
+
+Это происходит автоматически:
+   • При запуске/остановке через иконку в меню или ярлык
+   • При аварийном завершении — DNS восстановится при
+     следующем запуске скрипта (crash recovery)
+
+-------------------------------------
 ПАНЕЛЬ УПРАВЛЕНИЯ (для продвинутых)
 -------------------------------------
 Откройте в браузере:
@@ -144,6 +161,10 @@ https://metacubex.github.io/metacubexd/
    sudo launchctl unload /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist 2>/dev/null
    sudo rm -f /Library/LaunchDaemons/ru.dostup.vpn.mihomo.plist
    sudo rm -f /etc/sudoers.d/dostup-vpn
+   # Восстановить DNS
+   IFACE=$(route get default 2>/dev/null | awk '/interface:/{print $2}')
+   SERVICE=$(networksetup -listallhardwareports | grep -B1 "Device: $IFACE" | head -1 | sed 's/Hardware Port: //')
+   sudo networksetup -setdnsservers "$SERVICE" empty 2>/dev/null
    sudo pkill mihomo 2>/dev/null
    rm -rf ~/dostup
    rm -rf ~/Desktop/Dostup_VPN.app
