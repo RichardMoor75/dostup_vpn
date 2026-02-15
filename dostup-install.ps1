@@ -670,19 +670,59 @@ function Update-Providers {
     Write-Host ''
 
     $api = 'http://127.0.0.1:9090'
-    $endpoints = @(
-        @{ Name = 'Прокси (Subscription)'; Url = "$api/providers/proxies/Subscription" },
-        @{ Name = 'Правила (direct-rules)'; Url = "$api/providers/rules/direct-rules" },
-        @{ Name = 'Правила (proxy-rules)'; Url = "$api/providers/rules/proxy-rules" }
-    )
 
-    foreach ($ep in $endpoints) {
-        try {
-            Invoke-WebRequest -Uri $ep.Url -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
-            Write-OK "$($ep.Name) — обновлено"
-        } catch {
-            Write-Fail "$($ep.Name) — ошибка: $_"
+    # Динамическое получение proxy-providers
+    try {
+        $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+        foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+            try {
+                Invoke-WebRequest -Uri "$api/providers/proxies/$name" -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+                Write-OK "Прокси ($name) — обновлено"
+            } catch {
+                Write-Fail "Прокси ($name) — ошибка: $_"
+            }
         }
+    } catch {
+        Write-Fail "Не удалось получить список proxy-providers: $_"
+    }
+
+    # Динамическое получение rule-providers
+    try {
+        $ruleData = Invoke-WebRequest -Uri "$api/providers/rules" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+        foreach ($name in $ruleData.providers.PSObject.Properties.Name) {
+            try {
+                Invoke-WebRequest -Uri "$api/providers/rules/$name" -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+                Write-OK "Правило ($name) — обновлено"
+            } catch {
+                Write-Fail "Правило ($name) — ошибка: $_"
+            }
+        }
+    } catch {
+        Write-Fail "Не удалось получить список rule-providers: $_"
+    }
+
+    Write-Host ''
+}
+
+function Invoke-Healthcheck {
+    Write-Host ''
+    Write-Step 'Проверка нод...'
+    Write-Host ''
+
+    $api = 'http://127.0.0.1:9090'
+
+    try {
+        $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+        foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+            try {
+                Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 30 | Out-Null
+                Write-OK "$name — проверено"
+            } catch {
+                Write-Fail "$name — ошибка: $_"
+            }
+        }
+    } catch {
+        Write-Fail "Не удалось получить список провайдеров: $_"
     }
 
     Write-Host ''
@@ -917,6 +957,10 @@ if ($args.Count -gt 0) {
             Update-Providers
             exit
         }
+        'healthcheck' {
+            Invoke-Healthcheck
+            exit
+        }
         'dns-set' {
             if ([Environment]::OSVersion.Version.Major -ge 10) {
                 & "$DOSTUP_DIR\dns-helper.ps1" set
@@ -956,10 +1000,11 @@ if ($proc) {
     Write-Host '1) Остановить'
     Write-Host '2) Перезапустить'
     Write-Host '3) Обновить прокси и правила'
-    Write-Host '4) Проверить доступ'
-    Write-Host '5) Отмена'
+    Write-Host '4) Проверка нод'
+    Write-Host '5) Проверить доступ'
+    Write-Host '6) Отмена'
     Write-Host ''
-    $choice = Read-Host 'Выберите (1-5)'
+    $choice = Read-Host 'Выберите (1-6)'
 
     switch ($choice) {
         '1' {
@@ -981,6 +1026,10 @@ if ($proc) {
             Read-Host 'Нажмите Enter для закрытия'
         }
         '4' {
+            Invoke-Healthcheck
+            Read-Host 'Нажмите Enter для закрытия'
+        }
+        '5' {
             Test-SiteAccess
             Read-Host 'Нажмите Enter для закрытия'
         }
@@ -1111,6 +1160,9 @@ $sep2 = New-Object System.Windows.Forms.ToolStripSeparator
 $miUpdate = New-Object System.Windows.Forms.ToolStripMenuItem
 $miUpdate.Text = 'Обновить прокси и правила'
 
+$miHealthcheck = New-Object System.Windows.Forms.ToolStripMenuItem
+$miHealthcheck.Text = 'Проверка нод'
+
 $miCheck = New-Object System.Windows.Forms.ToolStripMenuItem
 $miCheck.Text = 'Проверить доступ'
 
@@ -1120,6 +1172,7 @@ $miCheck.Text = 'Проверить доступ'
 [void]$cms.Items.Add($miRestart)
 [void]$cms.Items.Add($sep2)
 [void]$cms.Items.Add($miUpdate)
+[void]$cms.Items.Add($miHealthcheck)
 [void]$cms.Items.Add($miCheck)
 
 $sep3 = New-Object System.Windows.Forms.ToolStripSeparator
@@ -1163,6 +1216,7 @@ function Update-Status {
         $miToggle.Text = 'Остановить VPN'
         $miRestart.Enabled = $true
         $miUpdate.Enabled = $true
+        $miHealthcheck.Enabled = $true
         $miCheck.Enabled = $true
     } else {
         $tray.Icon = $iconOff
@@ -1172,6 +1226,7 @@ function Update-Status {
         $miToggle.Text = 'Запустить VPN'
         $miRestart.Enabled = $false
         $miUpdate.Enabled = $false
+        $miHealthcheck.Enabled = $false
         $miCheck.Enabled = $false
     }
 }
@@ -1241,17 +1296,28 @@ $miRestart.Add_Click({
 $miUpdate.Add_Click({
     try {
         $api = 'http://127.0.0.1:9090'
-        $endpoints = @(
-            "$api/providers/proxies/Subscription",
-            "$api/providers/rules/direct-rules",
-            "$api/providers/rules/proxy-rules"
-        )
         $errors = 0
-        foreach ($ep in $endpoints) {
-            try {
-                Invoke-WebRequest -Uri $ep -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
-            } catch { $errors++ }
-        }
+
+        # Dynamic proxy providers
+        try {
+            $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+            foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+                try {
+                    Invoke-WebRequest -Uri "$api/providers/proxies/$name" -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+                } catch { $errors++ }
+            }
+        } catch { $errors++ }
+
+        # Dynamic rule providers
+        try {
+            $ruleData = Invoke-WebRequest -Uri "$api/providers/rules" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+            foreach ($name in $ruleData.providers.PSObject.Properties.Name) {
+                try {
+                    Invoke-WebRequest -Uri "$api/providers/rules/$name" -Method Put -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+                } catch { $errors++ }
+            }
+        } catch { $errors++ }
+
         if ($errors -eq 0) {
             $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Провайдеры обновлены', [System.Windows.Forms.ToolTipIcon]::Info)
         } else {
@@ -1259,6 +1325,27 @@ $miUpdate.Add_Click({
         }
     } catch {
         $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Ошибка обновления', [System.Windows.Forms.ToolTipIcon]::Error)
+    }
+})
+
+# Healthcheck (inline, balloon notification)
+$miHealthcheck.Add_Click({
+    try {
+        $api = 'http://127.0.0.1:9090'
+        $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+        $errors = 0
+        foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
+            try {
+                Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 30 | Out-Null
+            } catch { $errors++ }
+        }
+        if ($errors -eq 0) {
+            $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Проверка завершена', [System.Windows.Forms.ToolTipIcon]::Info)
+        } else {
+            $tray.ShowBalloonTip(3000, 'Dostup VPN', "Проверка с ошибками ($errors)", [System.Windows.Forms.ToolTipIcon]::Warning)
+        }
+    } catch {
+        $tray.ShowBalloonTip(3000, 'Dostup VPN', 'Ошибка проверки нод', [System.Windows.Forms.ToolTipIcon]::Error)
     }
 })
 

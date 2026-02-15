@@ -9,6 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var toggleMenuItem: NSMenuItem!
     private var restartMenuItem: NSMenuItem!
     private var updateProvidersMenuItem: NSMenuItem!
+    private var healthcheckMenuItem: NSMenuItem!
     private var checkMenuItem: NSMenuItem!
     private var timer: Timer?
 
@@ -89,6 +90,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateProvidersMenuItem.target = self
         menu.addItem(updateProvidersMenuItem)
 
+        // Healthcheck
+        healthcheckMenuItem = NSMenuItem(title: "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0430} \u{043D}\u{043E}\u{0434}", action: #selector(healthcheckProviders), keyEquivalent: "")
+        healthcheckMenuItem.target = self
+        menu.addItem(healthcheckMenuItem)
+
         // Check access
         checkMenuItem = NSMenuItem(title: "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{0438}\u{0442}\u{044C} \u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}", action: #selector(checkAccess), keyEquivalent: "")
         checkMenuItem.target = self
@@ -129,6 +135,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Update menu items
         restartMenuItem.isEnabled = running
         updateProvidersMenuItem.isEnabled = running
+        healthcheckMenuItem.isEnabled = running
         checkMenuItem.isEnabled = running
         if running {
             statusMenuItem.title = "\u{25CF} VPN \u{0440}\u{0430}\u{0431}\u{043E}\u{0442}\u{0430}\u{0435}\u{0442}"
@@ -223,31 +230,92 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func updateProviders() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let endpoints = [
-                ("Subscription", "http://127.0.0.1:9090/providers/proxies/Subscription"),
-                ("direct-rules", "http://127.0.0.1:9090/providers/rules/direct-rules"),
-                ("proxy-rules", "http://127.0.0.1:9090/providers/rules/proxy-rules")
-            ]
+            let api = "http://127.0.0.1:9090"
             var allOk = true
             let semaphore = DispatchSemaphore(value: 0)
-            for (_, urlStr) in endpoints {
-                var request = URLRequest(url: URL(string: urlStr)!)
-                request.httpMethod = "PUT"
-                request.timeoutInterval = 15
-                URLSession.shared.dataTask(with: request) { _, response, error in
-                    if let http = response as? HTTPURLResponse, (200...204).contains(http.statusCode) {
-                        // OK
-                    } else {
-                        allOk = false
-                    }
-                    semaphore.signal()
-                }.resume()
-                semaphore.wait()
+
+            // Update proxy providers dynamically
+            if let url = URL(string: "\(api)/providers/proxies"),
+               let data = try? Data(contentsOf: url),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let providers = json["providers"] as? [String: Any] {
+                for name in providers.keys {
+                    let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+                    var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)")!)
+                    request.httpMethod = "PUT"
+                    request.timeoutInterval = 15
+                    URLSession.shared.dataTask(with: request) { _, response, _ in
+                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
+                            allOk = false
+                        }
+                        semaphore.signal()
+                    }.resume()
+                    semaphore.wait()
+                }
+            } else {
+                allOk = false
             }
+
+            // Update rule providers dynamically
+            if let url = URL(string: "\(api)/providers/rules"),
+               let data = try? Data(contentsOf: url),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let providers = json["providers"] as? [String: Any] {
+                for name in providers.keys {
+                    let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+                    var request = URLRequest(url: URL(string: "\(api)/providers/rules/\(encoded)")!)
+                    request.httpMethod = "PUT"
+                    request.timeoutInterval = 15
+                    URLSession.shared.dataTask(with: request) { _, response, _ in
+                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
+                            allOk = false
+                        }
+                        semaphore.signal()
+                    }.resume()
+                    semaphore.wait()
+                }
+            }
+
             DispatchQueue.main.async {
                 self?.showNotification(
                     title: "Dostup VPN",
                     text: allOk ? "\u{041F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{044B} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{044B}" : "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{0438}\u{044F} \u{043F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{043E}\u{0432}"
+                )
+            }
+        }
+    }
+
+    @objc private func healthcheckProviders() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let api = "http://127.0.0.1:9090"
+            var allOk = true
+            let semaphore = DispatchSemaphore(value: 0)
+
+            if let url = URL(string: "\(api)/providers/proxies"),
+               let data = try? Data(contentsOf: url),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let providers = json["providers"] as? [String: Any] {
+                for name in providers.keys {
+                    let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+                    var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)/healthcheck")!)
+                    request.httpMethod = "GET"
+                    request.timeoutInterval = 30
+                    URLSession.shared.dataTask(with: request) { _, response, _ in
+                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
+                            allOk = false
+                        }
+                        semaphore.signal()
+                    }.resume()
+                    semaphore.wait()
+                }
+            } else {
+                allOk = false
+            }
+
+            DispatchQueue.main.async {
+                self?.showNotification(
+                    title: "Dostup VPN",
+                    text: allOk ? "\u{041F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0430} \u{0437}\u{0430}\u{0432}\u{0435}\u{0440}\u{0448}\u{0435}\u{043D}\u{0430}" : "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430} \u{043F}\u{0440}\u{043E}\u{0432}\u{0435}\u{0440}\u{043A}\u{0438} \u{043D}\u{043E}\u{0434}"
                 )
             }
         }
