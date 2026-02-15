@@ -221,9 +221,13 @@ process_config() {
     # 5. Замена DNS listen: 0.0.0.0:53 → 127.0.0.1:1053
     sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
 
-    # 6. Проверка порта mixed-port
-    local port
-    port=$(grep -oP 'mixed-port:\s*\K\d+' "$temp" 2>/dev/null || echo "2080")
+    # 6. Принудительная установка mixed-port: 7890 (если свободен)
+    local port desired_port=7890
+    port=$(grep -oP 'mixed-port:\s*\K\d+' "$temp" 2>/dev/null || echo "7890")
+    if [[ "$port" != "$desired_port" ]]; then
+        sed -i "s/mixed-port: $port/mixed-port: $desired_port/" "$temp"
+        port="$desired_port"
+    fi
 
     if ! check_port_free "$port"; then
         local new_port
@@ -570,8 +574,12 @@ process_config() {
     sed -i '/RULE-SET/d' "$temp"
     sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
 
-    local port
-    port=$(grep -oP 'mixed-port:\s*\K\d+' "$temp" 2>/dev/null || echo "2080")
+    local port desired_port=7890
+    port=$(grep -oP 'mixed-port:\s*\K\d+' "$temp" 2>/dev/null || echo "7890")
+    if [[ "$port" != "$desired_port" ]]; then
+        sed -i "s/mixed-port: $port/mixed-port: $desired_port/" "$temp"
+        port="$desired_port"
+    fi
     if ! check_port_free "$port"; then
         local new_port
         new_port=$(find_free_port "$port")
@@ -585,7 +593,7 @@ process_config() {
 }
 
 get_proxy_port() {
-    grep -oP 'mixed-port:\s*\K\d+' "$CONFIG_FILE" 2>/dev/null || echo "2080"
+    grep -oP 'mixed-port:\s*\K\d+' "$CONFIG_FILE" 2>/dev/null || echo "7890"
 }
 
 # === Команды ===
@@ -817,7 +825,7 @@ do_uninstall() {
 
 do_help() {
     local port
-    port=$(get_proxy_port 2>/dev/null || echo "2080")
+    port=$(get_proxy_port 2>/dev/null || echo "7890")
     echo ""
     echo -e "${BLUE}Dostup VPN — управление прокси${NC}"
     echo ""
