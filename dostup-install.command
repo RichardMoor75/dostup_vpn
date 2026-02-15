@@ -945,6 +945,11 @@ if pgrep -x "mihomo" > /dev/null; then
 else
     # Mihomo не запущен — запускаем без вопросов
     do_start
+    # Запускаем statusbar app если установлен но не запущен
+    STATUSBAR_APP="$DOSTUP_DIR/statusbar/DostupVPN-StatusBar.app"
+    if [[ -d "$STATUSBAR_APP" ]] && ! pgrep -x "DostupVPN-StatusBar" > /dev/null; then
+        open "$STATUSBAR_APP"
+    fi
     echo ""
     echo "Окно закроется через 5 секунд..."
     sleep 5
@@ -1149,6 +1154,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkMenuItem.target = self
         menu.addItem(checkMenuItem)
 
+        menu.addItem(NSMenuItem.separator())
+
+        // Exit
+        let exitMenuItem = NSMenuItem(title: "\u{0412}\u{044B}\u{0445}\u{043E}\u{0434}", action: #selector(exitApp), keyEquivalent: "q")
+        exitMenuItem.target = self
+        menu.addItem(exitMenuItem)
+
         statusItem.menu = menu
     }
 
@@ -1310,6 +1322,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func checkAccess() {
         runInTerminal(argument: "check")
+    }
+
+    @objc private func exitApp() {
+        let running = isMihomoRunning()
+        if !running {
+            NSApp.terminate(nil)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            let ePath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
+            task.arguments = ["-c", "'" + ePath + "' stop"]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     // MARK: - Helpers

@@ -94,6 +94,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         checkMenuItem.target = self
         menu.addItem(checkMenuItem)
 
+        menu.addItem(NSMenuItem.separator())
+
+        // Exit
+        let exitMenuItem = NSMenuItem(title: "\u{0412}\u{044B}\u{0445}\u{043E}\u{0434}", action: #selector(exitApp), keyEquivalent: "q")
+        exitMenuItem.target = self
+        menu.addItem(exitMenuItem)
+
         statusItem.menu = menu
     }
 
@@ -248,6 +255,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func checkAccess() {
         runInTerminal(argument: "check")
+    }
+
+    @objc private func exitApp() {
+        let running = isMihomoRunning()
+        if !running {
+            NSApp.terminate(nil)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
+            let shellCommand = "'" + escapedPath + "' stop"
+            let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
+            var errorDict: NSDictionary? = nil
+            let script = NSAppleScript(source: source)
+            script?.executeAndReturnError(&errorDict)
+
+            if let error = errorDict {
+                let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+                if errorNumber == -128 {
+                    return // User cancelled
+                }
+            }
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     // MARK: - Helpers

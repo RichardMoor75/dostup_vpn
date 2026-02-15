@@ -995,6 +995,15 @@ if ($proc) {
 } else {
     # Mihomo не запущен — запускаем
     Start-Mihomo
+    # Запускаем tray если установлен но не запущен
+    $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
+    if (Test-Path $trayScript) {
+        $trayRunning = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
+        if (-not $trayRunning) {
+            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden
+        }
+    }
     Write-Host ''
     Write-Host 'Окно закроется через 5 секунд...'
     Start-Sleep -Seconds 5
@@ -1112,6 +1121,13 @@ $miCheck.Text = 'Проверить доступ'
 [void]$cms.Items.Add($sep2)
 [void]$cms.Items.Add($miUpdate)
 [void]$cms.Items.Add($miCheck)
+
+$sep3 = New-Object System.Windows.Forms.ToolStripSeparator
+$miExit = New-Object System.Windows.Forms.ToolStripMenuItem
+$miExit.Text = 'Выход'
+
+[void]$cms.Items.Add($sep3)
+[void]$cms.Items.Add($miExit)
 
 $tray.ContextMenuStrip = $cms
 
@@ -1249,6 +1265,28 @@ $miUpdate.Add_Click({
 # Check access (opens terminal)
 $miCheck.Add_Click({
     Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$CONTROL_SCRIPT`" check"
+})
+
+# Exit (stop VPN + close tray)
+$miExit.Add_Click({
+    if (Test-VpnRunning) {
+        try {
+            if (Test-ServiceMode) {
+                sc.exe stop DostupVPN 2>$null | Out-Null
+            } elseif ([Environment]::OSVersion.Version.Major -lt 10) {
+                Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
+            } else {
+                Start-Process cmd.exe -ArgumentList "/c taskkill /F /IM mihomo.exe & powershell -ExecutionPolicy Bypass -NoProfile -File `"$DOSTUP_DIR\dns-helper.ps1`" restore" -Verb RunAs -Wait -WindowStyle Hidden
+            }
+            $osVer = [Environment]::OSVersion.Version
+            if ($osVer.Major -lt 10) {
+                $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+                Set-ItemProperty -Path $reg -Name ProxyEnable -Value 0
+            }
+        } catch { }
+    }
+    $tray.Visible = $false
+    [System.Windows.Forms.Application]::Exit()
 })
 
 try {
