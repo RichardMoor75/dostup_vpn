@@ -742,7 +742,7 @@ function Stop-Mihomo {
         Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
     } else {
         Write-Step 'Остановка Mihomo (требуются права администратора)...'
-        Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+        Start-Process cmd.exe -ArgumentList "/c taskkill /F /IM mihomo.exe & powershell -ExecutionPolicy Bypass -NoProfile -File `"$DOSTUP_DIR\dns-helper.ps1`" restore" -Verb RunAs -Wait -WindowStyle Hidden
     }
     # Wait with timeout
     $stopTimeout = 10
@@ -867,7 +867,7 @@ function Start-Mihomo {
     } elseif ([Environment]::OSVersion.Version.Major -lt 10) {
         Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -WindowStyle Hidden
     } else {
-        Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+        Start-Process cmd.exe -ArgumentList "/c powershell -ExecutionPolicy Bypass -NoProfile -File `"$DOSTUP_DIR\dns-helper.ps1`" set & `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
     }
     if (Wait-MihomoStart 5) {
         Enable-SystemProxy
@@ -917,6 +917,26 @@ if ($args.Count -gt 0) {
             Update-Providers
             exit
         }
+        'dns-set' {
+            if ([Environment]::OSVersion.Version.Major -ge 10) {
+                & "$DOSTUP_DIR\dns-helper.ps1" set
+            }
+            exit
+        }
+    }
+}
+
+# DNS fail-safe check (Win 10+ only)
+if ([Environment]::OSVersion.Version.Major -ge 10) {
+    $dnsHelper = "$DOSTUP_DIR\dns-helper.ps1"
+    $dnsFile = "$DOSTUP_DIR\original_dns.json"
+    $miRunning = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
+    if ($miRunning -and -not (Test-Path $dnsFile)) {
+        # Mihomo running but DNS not set — set it (e.g. after update)
+        Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -NoProfile -File `"$dnsHelper`" set" -Verb RunAs -Wait -WindowStyle Hidden
+    } elseif (-not $miRunning -and (Test-Path $dnsFile)) {
+        # Mihomo not running but DNS file exists — crash recovery
+        Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -NoProfile -File `"$dnsHelper`" restore" -Verb RunAs -Wait -WindowStyle Hidden
     }
 }
 
@@ -1157,7 +1177,7 @@ $miToggle.Add_Click({
             } elseif ([Environment]::OSVersion.Version.Major -lt 10) {
                 Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
             } else {
-                Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+                Start-Process cmd.exe -ArgumentList "/c taskkill /F /IM mihomo.exe & powershell -ExecutionPolicy Bypass -NoProfile -File `"$DOSTUP_DIR\dns-helper.ps1`" restore" -Verb RunAs -Wait -WindowStyle Hidden
             }
             $osVer = [Environment]::OSVersion.Version
             if ($osVer.Major -lt 10) {
@@ -1177,7 +1197,7 @@ $miToggle.Add_Click({
             } elseif ([Environment]::OSVersion.Version.Major -lt 10) {
                 Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -WindowStyle Hidden
             } else {
-                Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+                Start-Process cmd.exe -ArgumentList "/c powershell -ExecutionPolicy Bypass -NoProfile -File `"$DOSTUP_DIR\dns-helper.ps1`" set & `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
             }
             Start-Sleep -Seconds 3
             $osVer = [Environment]::OSVersion.Version
@@ -1240,6 +1260,118 @@ try {
 '@
 $trayPs1 | Set-Content -Path "$DOSTUP_DIR\DostupVPN-Tray.ps1" -Encoding UTF8
 Write-OK 'Tray application created'
+
+# DNS helper script (Win 10+ only — TUN mode)
+if ([Environment]::OSVersion.Version.Major -ge 10) {
+    Write-Step 'Creating DNS helper...'
+    $dnsHelper = @'
+# DNS Helper for Dostup VPN (Win 10+)
+# Usage: powershell -ExecutionPolicy Bypass -NoProfile -File dns-helper.ps1 <set|restore|check-recovery>
+
+$DOSTUP_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
+$DNS_SAVE_FILE = "$DOSTUP_DIR\original_dns.json"
+
+function Get-ActiveAdapter {
+    # Find active non-virtual, non-TUN adapter
+    $adapters = Get-NetAdapter | Where-Object {
+        $_.Status -eq 'Up' -and
+        $_.InterfaceDescription -notmatch 'Hyper-V|Loopback|TAP-Windows|Wintun|WireGuard|VPN'
+    }
+    if ($adapters -is [array]) {
+        # Prefer physical adapters (Wi-Fi or Ethernet)
+        $preferred = $adapters | Where-Object { $_.InterfaceDescription -match 'Wi-Fi|Wireless|Ethernet|Realtek|Intel|Broadcom|Qualcomm|Killer|Marvell' }
+        if ($preferred) {
+            if ($preferred -is [array]) { return $preferred[0] } else { return $preferred }
+        }
+        return $adapters[0]
+    }
+    return $adapters
+}
+
+function Set-DostupDns {
+    $adapter = Get-ActiveAdapter
+    if (-not $adapter) {
+        Write-Host '[DNS] No active network adapter found' -ForegroundColor Yellow
+        return
+    }
+    $alias = $adapter.InterfaceAlias
+
+    # Save original DNS
+    $currentDns = Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    $originalAddresses = @()
+    if ($currentDns -and $currentDns.ServerAddresses) {
+        # Don't save if already set to our DNS
+        $current = ($currentDns.ServerAddresses | Sort-Object) -join ','
+        if ($current -eq '8.8.8.8,9.9.9.9' -or $current -eq '9.9.9.9,8.8.8.8') {
+            Write-Host "[DNS] Already set to 8.8.8.8/9.9.9.9 on $alias" -ForegroundColor Green
+            return
+        }
+        $originalAddresses = @($currentDns.ServerAddresses)
+    }
+
+    $saveData = @{
+        InterfaceAlias = $alias
+        OriginalDns = $originalAddresses
+    }
+    $json = $saveData | ConvertTo-Json
+    [System.IO.File]::WriteAllText($DNS_SAVE_FILE, $json, (New-Object System.Text.UTF8Encoding($false)))
+
+    # Set public DNS
+    Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses @('8.8.8.8','9.9.9.9')
+    & ipconfig /flushdns 2>$null | Out-Null
+    Write-Host "[DNS] Set 8.8.8.8/9.9.9.9 on $alias" -ForegroundColor Green
+}
+
+function Restore-DostupDns {
+    if (-not (Test-Path $DNS_SAVE_FILE)) {
+        return
+    }
+    try {
+        $saved = Get-Content $DNS_SAVE_FILE -Raw | ConvertFrom-Json
+        $alias = $saved.InterfaceAlias
+
+        # Check adapter still exists
+        $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue
+        if (-not $adapter) {
+            Remove-Item $DNS_SAVE_FILE -Force -ErrorAction SilentlyContinue
+            return
+        }
+
+        if ($saved.OriginalDns -and $saved.OriginalDns.Count -gt 0) {
+            Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses $saved.OriginalDns
+            Write-Host "[DNS] Restored to $($saved.OriginalDns -join ', ') on $alias" -ForegroundColor Green
+        } else {
+            # Original was DHCP
+            Set-DnsClientServerAddress -InterfaceAlias $alias -ResetServerAddresses
+            Write-Host "[DNS] Restored to DHCP on $alias" -ForegroundColor Green
+        }
+        & ipconfig /flushdns 2>$null | Out-Null
+        Remove-Item $DNS_SAVE_FILE -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Host "[DNS] Restore failed: $_" -ForegroundColor Yellow
+        Remove-Item $DNS_SAVE_FILE -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-DnsRecovery {
+    if ((Test-Path $DNS_SAVE_FILE) -and -not (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue)) {
+        Write-Host '[DNS] Crash recovery: restoring DNS...' -ForegroundColor Yellow
+        Restore-DostupDns
+    }
+}
+
+# Main
+if ($args.Count -gt 0) {
+    switch ($args[0]) {
+        'set' { Set-DostupDns }
+        'restore' { Restore-DostupDns }
+        'check-recovery' { Test-DnsRecovery }
+    }
+}
+'@
+    $dnsHelper | Set-Content -Path "$DOSTUP_DIR\dns-helper.ps1" -Encoding UTF8
+    Write-OK 'DNS helper created'
+}
 
 Write-Step 'Creating desktop shortcut...'
 $WshShell = New-Object -ComObject WScript.Shell
@@ -1321,10 +1453,39 @@ public class DostupVPNService : ServiceBase
         _mihomo.Start();
         _mihomo.BeginOutputReadLine();
         _mihomo.BeginErrorReadLine();
+
+        // Set DNS to 8.8.8.8/9.9.9.9 (runs as SYSTEM — no UAC)
+        try {
+            string dnsHelper = Path.Combine(dir, "dns-helper.ps1");
+            if (File.Exists(dnsHelper)) {
+                var dns = new Process();
+                dns.StartInfo.FileName = "powershell.exe";
+                dns.StartInfo.Arguments = "-ExecutionPolicy Bypass -NoProfile -File \"" + dnsHelper + "\" set";
+                dns.StartInfo.UseShellExecute = false;
+                dns.StartInfo.CreateNoWindow = true;
+                dns.Start();
+                dns.WaitForExit(10000);
+            }
+        } catch {}
     }
 
     protected override void OnStop()
     {
+        // Restore DNS before stopping mihomo
+        try {
+            string dir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+            string dnsHelper = Path.Combine(dir, "dns-helper.ps1");
+            if (File.Exists(dnsHelper)) {
+                var dns = new Process();
+                dns.StartInfo.FileName = "powershell.exe";
+                dns.StartInfo.Arguments = "-ExecutionPolicy Bypass -NoProfile -File \"" + dnsHelper + "\" restore";
+                dns.StartInfo.UseShellExecute = false;
+                dns.StartInfo.CreateNoWindow = true;
+                dns.Start();
+                dns.WaitForExit(10000);
+            }
+        } catch {}
+
         _stopping = true;
         if (_mihomo != null && !_mihomo.HasExited)
         {
