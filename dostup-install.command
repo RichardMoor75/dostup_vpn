@@ -934,8 +934,7 @@ except:
             else
                 echo "✗ Не удалось получить список провайдеров"
             fi
-            echo "Окно закроется через 5 секунд..."
-            sleep 5
+            read -p "Нажмите Enter для закрытия..." < /dev/tty
             close_terminal_window
             exit 0
             ;;
@@ -1067,8 +1066,7 @@ except:
             else
                 echo "✗ Не удалось получить список провайдеров"
             fi
-            echo "Окно закроется через 5 секунд..."
-            sleep 5
+            read -p "Нажмите Enter для закрытия..." < /dev/tty
             close_terminal_window
             exit 0
             ;;
@@ -1212,7 +1210,7 @@ import UserNotifications
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
@@ -1238,6 +1236,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupMenu()
         startTimer()
+        UNUserNotificationCenter.current().delegate = self
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         updateStatus()
     }
@@ -1617,6 +1616,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         open.arguments = ["-a", "Terminal", tempScript]
         try? open.run()
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 
     private func showNotification(title: String, text: String) {
