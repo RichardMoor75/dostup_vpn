@@ -1051,7 +1051,8 @@ if ($args.Count -gt 0) {
             } else {
                 $summary = @('Ошибка перезапуска')
             }
-            Write-Output ($summary -join "`n")
+            $result = $summary -join "`n"
+            [System.IO.File]::WriteAllText("$DOSTUP_DIR\restart-result.txt", $result, (New-Object System.Text.UTF8Encoding($false)))
             exit
         }
         'check' {
@@ -1399,8 +1400,9 @@ $miRestart.Add_Click({
     $miStatus.Text = [char]0x21BB + ' Перезапуск...'
     $miStatus.ForeColor = [System.Drawing.Color]::Orange
 
-    $script:restartOutFile = "$env:TEMP\dostup-restart-$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
-    $script:restartProc = Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -File `"$CONTROL_SCRIPT`" restart-silent" -WindowStyle Hidden -PassThru -RedirectStandardOutput $script:restartOutFile
+    $script:restartResultFile = "$DOSTUP_DIR\restart-result.txt"
+    Remove-Item $script:restartResultFile -Force -ErrorAction SilentlyContinue
+    $script:restartProc = Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -File `"$CONTROL_SCRIPT`" restart-silent" -WindowStyle Hidden -PassThru
 
     $script:restartTimer = New-Object System.Windows.Forms.Timer
     $script:restartTimer.Interval = 2000
@@ -1408,9 +1410,9 @@ $miRestart.Add_Click({
         if ($script:restartProc.HasExited) {
             $script:restartTimer.Stop()
             $result = ''
-            if (Test-Path $script:restartOutFile) {
-                $result = (Get-Content $script:restartOutFile -Raw).Trim()
-                Remove-Item $script:restartOutFile -Force -ErrorAction SilentlyContinue
+            if (Test-Path $script:restartResultFile) {
+                $result = [System.IO.File]::ReadAllText($script:restartResultFile, [System.Text.Encoding]::UTF8).Trim()
+                Remove-Item $script:restartResultFile -Force -ErrorAction SilentlyContinue
             }
             if ([string]::IsNullOrEmpty($result)) { $result = 'VPN перезапущен' }
             $icon = if ($result -match 'Ошибка') { [System.Windows.Forms.ToolTipIcon]::Error } else { [System.Windows.Forms.ToolTipIcon]::Info }
