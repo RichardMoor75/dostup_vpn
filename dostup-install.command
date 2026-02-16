@@ -739,22 +739,30 @@ check_script_update() {
 
     local url="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command"
     local tmp="/tmp/dostup-installer-check"
-    if curl -sL --max-time 10 "$url" -o "$tmp" 2>/dev/null; then
-        local new_hash
-        new_hash=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
-        if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
-            echo ""
-            echo -e "${YELLOW}▶ Доступно обновление скрипта управления${NC}"
-            printf "  Обновить сейчас? (y/N): "
-            read -r choice
-            if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-                echo -e "${YELLOW}▶ Обновление...${NC}"
-                bash "$tmp"
-                exit 0
-            fi
-        fi
+    # Retry: сеть может быть не готова сразу после остановки VPN
+    if ! download_with_retry "$url" "$tmp"; then
         rm -f "$tmp"
+        return 0
     fi
+    local new_hash
+    new_hash=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
+    if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
+        if [[ "$DOSTUP_SILENT" == "1" ]]; then
+            echo "DOSTUP_SCRIPT_UPDATE"
+            rm -f "$tmp"
+            return 0
+        fi
+        echo ""
+        echo -e "${YELLOW}▶ Доступно обновление скрипта управления${NC}"
+        printf "  Обновить сейчас? (y/N): "
+        read -r choice
+        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+            echo -e "${YELLOW}▶ Обновление...${NC}"
+            bash "$tmp"
+            exit 0
+        fi
+    fi
+    rm -f "$tmp"
 }
 
 do_start() {
@@ -868,6 +876,23 @@ if [[ -n "$1" ]]; then
             echo "Окно закроется через 5 секунд..."
             sleep 5
             close_terminal_window
+            exit 0
+            ;;
+        restart-silent)
+            export DOSTUP_SILENT=1
+            do_stop >/dev/null 2>&1 || true
+            output=$(do_start 2>&1)
+            summary=""
+            echo "$output" | grep -q "DOSTUP_SCRIPT_UPDATE" && summary="${summary}Обновление скрипта доступно\n"
+            echo "$output" | grep -q "Ядро обновлено" && summary="${summary}Ядро обновлено\n"
+            echo "$output" | grep -q "Конфиг обновлён" && summary="${summary}Конфиг обновлён\n"
+            echo "$output" | grep -q "Geo-базы обновлены" && summary="${summary}Geo-базы обновлены\n"
+            if pgrep -x "mihomo" > /dev/null; then
+                [[ -z "$summary" ]] && summary="VPN перезапущен" || summary="${summary}VPN перезапущен"
+            else
+                summary="Ошибка перезапуска"
+            fi
+            echo -e "$summary"
             exit 0
             ;;
         update-providers)
@@ -1449,7 +1474,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restartVPN() {
-        runInTerminal(argument: "restart")
+        restartMenuItem.isEnabled = false
+        statusMenuItem.title = "\u{21BB} \u{041F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0441}\u{043A}..."
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [self.controlScript, "restart-silent"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let text = output.isEmpty ? "VPN \u{043F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}" : output
+
+            DispatchQueue.main.async {
+                self.showNotification(title: "Dostup VPN", text: text)
+                self.updateStatus()
+                self.restartMenuItem.isEnabled = self.isMihomoRunning()
+            }
+        }
     }
 
     @objc private func updateProviders() {

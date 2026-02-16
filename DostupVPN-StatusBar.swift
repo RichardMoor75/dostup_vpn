@@ -229,7 +229,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restartVPN() {
-        runInTerminal(argument: "restart")
+        restartMenuItem.isEnabled = false
+        statusMenuItem.title = "\u{21BB} \u{041F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0441}\u{043A}..."
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [self.controlScript, "restart-silent"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let text = output.isEmpty ? "VPN \u{043F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}" : output
+
+            DispatchQueue.main.async {
+                self.showNotification(title: "Dostup VPN", text: text)
+                self.updateStatus()
+                self.restartMenuItem.isEnabled = self.isMihomoRunning()
+            }
+        }
     }
 
     @objc private func updateProviders() {

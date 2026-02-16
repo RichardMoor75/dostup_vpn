@@ -860,12 +860,27 @@ function Test-InstallerUpdate {
         if (-not $s.installer_hash) { return }
 
         $url = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1'
-        $content = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10).Content
+        # Retry: сеть может быть не готова сразу после остановки VPN
+        $content = $null
+        for ($retry = 0; $retry -lt 3; $retry++) {
+            try {
+                $content = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 15).Content
+                break
+            } catch {
+                if ($retry -lt 2) { Start-Sleep -Seconds 2 }
+            }
+        }
+        if (-not $content) { return }
+
         $sha = [System.Security.Cryptography.SHA256]::Create()
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
         $newHash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-','').ToLower()
 
         if ($newHash -ne $s.installer_hash) {
+            if ($env:DOSTUP_SILENT -eq '1') {
+                Write-Output 'DOSTUP_SCRIPT_UPDATE'
+                return
+            }
             Write-Host ''
             Write-Warning 'Доступно обновление скрипта управления'
             $choice = Read-Host '  Обновить сейчас? (y/N)'
@@ -1020,6 +1035,23 @@ if ($args.Count -gt 0) {
             Write-Host ''
             Write-Host 'Окно закроется через 5 секунд...'
             Start-Sleep -Seconds 5
+            exit
+        }
+        'restart-silent' {
+            $env:DOSTUP_SILENT = '1'
+            Stop-Mihomo *>&1 | Out-Null
+            $output = Start-Mihomo *>&1 | Out-String
+            $summary = @()
+            if ($output -match 'DOSTUP_SCRIPT_UPDATE') { $summary += 'Обновление скрипта доступно' }
+            if ($output -match 'Ядро обновлено') { $summary += 'Ядро обновлено' }
+            if ($output -match 'Конфиг обновлён') { $summary += 'Конфиг обновлён' }
+            if ($output -match 'Geo-базы обновлены') { $summary += 'Geo-базы обновлены' }
+            if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+                $summary += 'VPN перезапущен'
+            } else {
+                $summary = @('Ошибка перезапуска')
+            }
+            Write-Output ($summary -join "`n")
             exit
         }
         'check' {
@@ -1361,9 +1393,32 @@ $miToggle.Add_Click({
     }
 })
 
-# Restart (opens terminal with control script)
+# Restart (silent background process with balloon notification)
 $miRestart.Add_Click({
-    Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File `"$CONTROL_SCRIPT`" restart"
+    $miRestart.Enabled = $false
+    $miStatus.Text = [char]0x21BB + ' Перезапуск...'
+    $miStatus.ForeColor = [System.Drawing.Color]::Orange
+
+    $script:restartOutFile = "$env:TEMP\dostup-restart-$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
+    $script:restartProc = Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -File `"$CONTROL_SCRIPT`" restart-silent" -WindowStyle Hidden -PassThru -RedirectStandardOutput $script:restartOutFile
+
+    $script:restartTimer = New-Object System.Windows.Forms.Timer
+    $script:restartTimer.Interval = 2000
+    $script:restartTimer.Add_Tick({
+        if ($script:restartProc.HasExited) {
+            $script:restartTimer.Stop()
+            $result = ''
+            if (Test-Path $script:restartOutFile) {
+                $result = (Get-Content $script:restartOutFile -Raw).Trim()
+                Remove-Item $script:restartOutFile -Force -ErrorAction SilentlyContinue
+            }
+            if ([string]::IsNullOrEmpty($result)) { $result = 'VPN перезапущен' }
+            $icon = if ($result -match 'Ошибка') { [System.Windows.Forms.ToolTipIcon]::Error } else { [System.Windows.Forms.ToolTipIcon]::Info }
+            $tray.ShowBalloonTip(5000, 'Dostup VPN', $result, $icon)
+            Update-Status
+        }
+    })
+    $script:restartTimer.Start()
 })
 
 # Update providers (inline PUT requests, balloon notification)
