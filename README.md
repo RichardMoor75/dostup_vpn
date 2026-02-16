@@ -45,7 +45,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 ### macOS — иконка в меню-баре
 
-На Mac с установленным Xcode CLT (`swiftc`) автоматически создаётся приложение в строке меню:
+При установке автоматически создаётся приложение в строке меню:
 
 - Цветная иконка (зелёный кот) — VPN работает, серая — остановлен
 - Запуск / остановка VPN одним кликом (без запроса пароля)
@@ -53,8 +53,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - «Выход» — остановка VPN и закрытие иконки
 - Автозапуск при входе в систему (LaunchAgent) и при старте VPN из приложения
 
-Приложение **Dostup_VPN** устанавливается в `~/Applications` (доступно через Spotlight и Launchpad).
-Если Xcode CLT не установлен — только приложение Dostup_VPN (без иконки в menu bar).
+Приложение **Dostup_VPN** также устанавливается в `~/Applications` (доступно через Spotlight и Launchpad) для управления через Terminal.
 
 ### Windows — иконка в системном трее
 
@@ -135,7 +134,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ├── DostupVPN-Service.exe    # Windows Service обёртка (Win 10+)
 ├── icon_on.png              # Иконка трея: VPN работает (Windows)
 ├── icon_off.png             # Иконка трея: VPN остановлен (Windows)
-├── statusbar/               # Menu bar приложение (macOS, если есть swiftc)
+├── statusbar/               # Menu bar приложение (macOS)
 │   ├── DostupVPN-StatusBar.app
 │   ├── icon_on.png          # Зелёная иконка (VPN работает)
 │   └── icon_off.png         # Серая иконка (VPN остановлен)

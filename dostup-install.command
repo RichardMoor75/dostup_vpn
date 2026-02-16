@@ -29,6 +29,7 @@ ICON_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon
 ICON_APP_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon_app.png"
 ICON_ON_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon_on.png"
 ICON_OFF_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon_off.png"
+STATUSBAR_BIN_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/DostupVPN-StatusBar"
 
 # --- Функции ---
 
@@ -1213,13 +1214,6 @@ LAUNCHER
 
 # Создание menu bar приложения
 create_statusbar_app() {
-    # Проверяем наличие swiftc
-    if ! command -v swiftc &>/dev/null; then
-        print_info "Xcode CLT не найден — menu bar приложение не установлено"
-        print_info "Для установки menu bar иконки выполните: xcode-select --install"
-        return 0
-    fi
-
     print_step "Создание menu bar приложения..."
 
     local statusbar_dir="$DOSTUP_DIR/statusbar"
@@ -1714,21 +1708,47 @@ SWIFTSOURCE
 </plist>
 SBPLIST
 
-    # Компиляция (может занять 5-10 секунд)
-    print_info "Компиляция Swift (это может занять несколько секунд)..."
-    if swiftc -O -o "$app_path/Contents/MacOS/DostupVPN-StatusBar" \
-        -framework Cocoa \
-        "$statusbar_dir/DostupVPN-StatusBar.swift" 2>/dev/null; then
+    local binary_path="$app_path/Contents/MacOS/DostupVPN-StatusBar"
+    local installed=false
 
-        # Снимаем карантин
+    # --- Способ 1: скачать предкомпилированный бинарник ---
+    print_info "Скачивание menu bar приложения..."
+    if download_with_retry "$STATUSBAR_BIN_URL" "$binary_path"; then
+        chmod +x "$binary_path"
+        xattr -d com.apple.quarantine "$binary_path" 2>/dev/null || true
         xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
+        installed=true
+        print_success "Menu bar приложение скачано"
+    else
+        print_info "Не удалось скачать, попытка компиляции..."
 
-        # Создаём LaunchAgent
+        # --- Способ 2 (fallback): компиляция через swiftc ---
+        # Надёжная проверка наличия Xcode CLT (command -v swiftc ненадёжна — macOS shim)
+        local dev_dir
+        dev_dir=$(xcode-select -p 2>/dev/null)
+        if [[ -n "$dev_dir" ]] && [[ -x "${dev_dir}/usr/bin/swiftc" ]]; then
+            print_info "Компиляция Swift (это может занять несколько секунд)..."
+            if swiftc -O -o "$binary_path" \
+                -framework Cocoa \
+                "$statusbar_dir/DostupVPN-StatusBar.swift" 2>/dev/null; then
+                xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
+                installed=true
+                print_success "Menu bar приложение скомпилировано"
+            else
+                print_warning "Не удалось скомпилировать menu bar приложение"
+            fi
+        else
+            print_info "Xcode CLT не найден, пропуск компиляции"
+        fi
+    fi
+
+    # --- Результат ---
+    if $installed; then
         create_launch_agent
-
         print_success "Menu bar приложение установлено"
     else
-        print_warning "Не удалось скомпилировать menu bar приложение"
+        print_warning "Menu bar приложение не установлено"
+        print_info "VPN будет работать через приложение Dostup_VPN"
         rm -rf "$statusbar_dir"
     fi
 }
@@ -2059,7 +2079,7 @@ print_success "Скрипт создан"
 # Ярлыки на рабочем столе
 create_desktop_shortcuts
 
-# Menu bar приложение (если доступен swiftc)
+# Menu bar приложение (скачивание бинарника, fallback на компиляцию)
 create_statusbar_app
 
 # Passwordless управление VPN (sudoers)
