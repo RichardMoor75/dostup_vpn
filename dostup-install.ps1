@@ -1119,12 +1119,12 @@ if ($proc) {
     # Mihomo не запущен — запускаем
     Start-Mihomo
     # Запускаем tray если установлен но не запущен
-    $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
-    if (Test-Path $trayScript) {
+    $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
+    if (Test-Path $trayVbs) {
         $trayRunning = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
         if (-not $trayRunning) {
-            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden
+            Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden
         }
     }
     Write-Host ''
@@ -1612,11 +1612,17 @@ $vpnLnk.Save()
 
 Write-OK 'Desktop shortcut created'
 
+Write-Step 'Creating tray launcher...'
+# VBScript launcher to start tray without visible console window
+$vbsContent = "CreateObject(""Wscript.Shell"").Run ""powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$DOSTUP_DIR\DostupVPN-Tray.ps1"""""", 0, False"
+[System.IO.File]::WriteAllText("$DOSTUP_DIR\LaunchTray.vbs", $vbsContent, (New-Object System.Text.UTF8Encoding($false)))
+Write-OK 'Tray launcher created'
+
 Write-Step 'Creating startup shortcut for tray...'
 $startupFolder = [Environment]::GetFolderPath('Startup')
 $trayLnk = $WshShell.CreateShortcut("$startupFolder\DostupVPN-Tray.lnk")
-$trayLnk.TargetPath = "powershell.exe"
-$trayLnk.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$DOSTUP_DIR\DostupVPN-Tray.ps1`""
+$trayLnk.TargetPath = "wscript.exe"
+$trayLnk.Arguments = "`"$DOSTUP_DIR\LaunchTray.vbs`""
 $trayLnk.WorkingDirectory = $DOSTUP_DIR
 if (Test-Path $iconPath) {
     $trayLnk.IconLocation = "$iconPath,0"
@@ -1793,9 +1799,9 @@ if (Wait-MihomoStart 5) {
     }
 
     # Launch tray application
-    $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
-    if (Test-Path $trayScript) {
-        Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden
+    $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
+    if (Test-Path $trayVbs) {
+        Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden
         Write-OK 'Tray application started'
     }
 
