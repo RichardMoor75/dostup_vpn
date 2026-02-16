@@ -1,4 +1,5 @@
 import Cocoa
+import UserNotifications
 
 // MARK: - AppDelegate
 
@@ -28,6 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupMenu()
         startTimer()
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         updateStatus()
     }
 
@@ -408,10 +410,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showNotification(title: String, text: String) {
-        let notification = NSUserNotification()
-        notification.title = title
-        notification.informativeText = text
-        NSUserNotificationCenter.default.deliver(notification)
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = text
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 }
 
