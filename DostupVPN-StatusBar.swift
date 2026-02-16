@@ -171,40 +171,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            let shellCommand: String
-            if running {
-                let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-                shellCommand = "'" + escapedPath + "' stop"
-            } else {
-                // Запуск mihomo напрямую (без control script) — Apple TN2065 паттерн
-                let dostupDir = self.homeDir + "/dostup"
-                let mihomoBin = dostupDir + "/mihomo"
-                let logFile = dostupDir + "/logs/mihomo.log"
-                let eBin = mihomoBin.replacingOccurrences(of: "'", with: "'\\''")
-                let eDir = dostupDir.replacingOccurrences(of: "'", with: "'\\''")
-                let eLog = logFile.replacingOccurrences(of: "'", with: "'\\''")
-                let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-                shellCommand = "/usr/libexec/ApplicationFirewall/socketfilterfw --add '\(eBin)' 2>/dev/null; " +
-                    "/usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp '\(eBin)' 2>/dev/null; " +
-                    "'\(eBin)' -d '\(eDir)' > '\(eLog)' 2>&1 & " +
-                    "sleep 4; bash '\(escapedPath)' dns-set"
-            }
-            let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
-            var errorDict: NSDictionary? = nil
-            let script = NSAppleScript(source: source)
-            script?.executeAndReturnError(&errorDict)
+            let task = Process()
 
-            if let error = errorDict {
-                let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+            if running {
+                // Stop: через control script (обрабатывает DNS restore)
+                task.executableURL = URL(fileURLWithPath: "/bin/bash")
+                let ePath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
+                task.arguments = ["-c", "'" + ePath + "' stop"]
+            } else {
+                // Start: напрямую через launchctl (без пароля, через sudoers)
+                task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+                task.arguments = ["-n", "/bin/launchctl", "start", "ru.dostup.vpn.mihomo"]
+            }
+
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+            } catch {
                 DispatchQueue.main.async {
-                    if errorNumber != -128 {
-                        let msg = error[NSAppleScript.errorMessage] as? String ?? ""
-                        self.showNotification(title: "Dostup VPN",
-                                              text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: " + msg)
-                    }
+                    self.showNotification(title: "Dostup VPN",
+                                          text: "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}: \(error.localizedDescription)")
                     self.updateStatus()
                 }
-            } else if running {
+                return
+            }
+
+            if running {
                 DispatchQueue.main.async {
                     self.showNotification(title: "Dostup VPN",
                                           text: "Dostup VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}")
@@ -214,6 +209,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // Mihomo нужно время на запуск — ждём 5 сек и проверяем
                 Thread.sleep(forTimeInterval: 5.0)
                 let started = self.isMihomoRunning()
+                if started {
+                    // Переключаем DNS на публичные (fail-safe)
+                    let dnsTask = Process()
+                    dnsTask.executableURL = URL(fileURLWithPath: "/bin/bash")
+                    let ePath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
+                    dnsTask.arguments = ["-c", "'" + ePath + "' dns-set"]
+                    dnsTask.standardOutput = FileHandle.nullDevice
+                    dnsTask.standardError = FileHandle.nullDevice
+                    try? dnsTask.run()
+                    dnsTask.waitUntilExit()
+                }
                 DispatchQueue.main.async {
                     if started {
                         self.showNotification(title: "Dostup VPN",
@@ -387,19 +393,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let escapedPath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
-            let shellCommand = "'" + escapedPath + "' stop"
-            let source = "do shell script \"" + shellCommand + "\" with administrator privileges"
-            var errorDict: NSDictionary? = nil
-            let script = NSAppleScript(source: source)
-            script?.executeAndReturnError(&errorDict)
-
-            if let error = errorDict {
-                let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
-                if errorNumber == -128 {
-                    return // User cancelled
-                }
-            }
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            let ePath = self.controlScript.replacingOccurrences(of: "'", with: "'\\''")
+            task.arguments = ["-c", "'" + ePath + "' stop"]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
             }
