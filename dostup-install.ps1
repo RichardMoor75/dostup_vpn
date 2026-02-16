@@ -1888,3 +1888,4 @@ if (Wait-MihomoStart 5) {
 Write-Host ''
 Write-Host 'Window will close in 5 seconds...'
 Start-Sleep -Seconds 5
+exit 0
