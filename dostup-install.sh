@@ -198,7 +198,8 @@ find_free_port() {
 }
 
 # --- Обработка конфига для Linux ---
-# Удаляет: external-controller, external-ui, tun, rule-providers, RULE-SET правила
+# Удаляет: external-ui, tun, rule-providers, RULE-SET правила
+# Оставляет: external-controller (для API — update-providers, healthcheck)
 # Меняет: DNS listen на 127.0.0.1:1053
 # Проверяет: свободность порта mixed-port
 # Результат в глобальной переменной PROXY_PORT
@@ -206,8 +207,8 @@ process_config() {
     local config="$1"
     local temp="${config}.processing"
 
-    # 1. Удаление external-controller, external-ui, external-ui-url
-    sed '/^external-controller:/d; /^external-ui:/d; /^external-ui-url:/d' "$config" > "$temp"
+    # 1. Удаление external-ui, external-ui-url (external-controller оставляем для API)
+    sed '/^external-ui:/d; /^external-ui-url:/d' "$config" > "$temp"
 
     # 2. Удаление блока tun: (от tun: до следующего ключа верхнего уровня)
     awk 'BEGIN{s=0} /^tun:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
@@ -568,7 +569,7 @@ process_config() {
     local config="$1"
     local temp="${config}.processing"
 
-    sed '/^external-controller:/d; /^external-ui:/d; /^external-ui-url:/d' "$config" > "$temp"
+    sed '/^external-ui:/d; /^external-ui-url:/d' "$config" > "$temp"
     awk 'BEGIN{s=0} /^tun:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
     awk 'BEGIN{s=0} /^rule-providers:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
     sed -i '/RULE-SET/d' "$temp"
@@ -823,6 +824,90 @@ do_uninstall() {
     print_success "Dostup VPN полностью удалён"
 }
 
+do_update_providers() {
+    if ! systemctl is-active --quiet dostup; then
+        print_error "Dostup не запущен. Запустите: sudo dostup start"
+        return 1
+    fi
+
+    echo ""
+    print_step "Обновление провайдеров..."
+
+    local api="http://127.0.0.1:9090"
+
+    # Proxy providers
+    local proxy_providers
+    proxy_providers=$(curl -s --max-time 5 "$api/providers/proxies" | jq -r '.providers | keys[] | select(. != "default")' 2>/dev/null)
+    if [[ -n "$proxy_providers" ]]; then
+        while IFS= read -r name; do
+            if curl -s -X PUT --max-time 15 "$api/providers/proxies/$name" > /dev/null 2>&1; then
+                echo -e "  ${GREEN}✓ Прокси: $name${NC}"
+            else
+                echo -e "  ${RED}✗ Прокси: $name${NC}"
+            fi
+        done <<< "$proxy_providers"
+    else
+        print_error "Не удалось получить список прокси-провайдеров"
+    fi
+
+    # Rule providers
+    local rule_providers
+    rule_providers=$(curl -s --max-time 5 "$api/providers/rules" | jq -r '.providers | keys[]' 2>/dev/null)
+    if [[ -n "$rule_providers" ]]; then
+        while IFS= read -r name; do
+            if curl -s -X PUT --max-time 15 "$api/providers/rules/$name" > /dev/null 2>&1; then
+                echo -e "  ${GREEN}✓ Правила: $name${NC}"
+            else
+                echo -e "  ${RED}✗ Правила: $name${NC}"
+            fi
+        done <<< "$rule_providers"
+    else
+        echo -e "  ${YELLOW}Нет rule-провайдеров${NC}"
+    fi
+
+    echo ""
+    print_success "Обновление завершено"
+}
+
+do_healthcheck() {
+    if ! systemctl is-active --quiet dostup; then
+        print_error "Dostup не запущен. Запустите: sudo dostup start"
+        return 1
+    fi
+
+    echo ""
+    print_step "Проверка нод..."
+    echo ""
+
+    local api="http://127.0.0.1:9090"
+    local proxy_providers
+    proxy_providers=$(curl -s --max-time 5 "$api/providers/proxies" | jq -r '.providers | keys[] | select(. != "default")' 2>/dev/null)
+
+    if [[ -z "$proxy_providers" ]]; then
+        print_error "Не удалось получить список прокси-провайдеров"
+        return 1
+    fi
+
+    while IFS= read -r name; do
+        # Run healthcheck
+        curl -s --max-time 30 "$api/providers/proxies/$name/healthcheck" > /dev/null 2>&1
+        # Get detailed results
+        echo -e "${BLUE}[$name]${NC}"
+        local details
+        details=$(curl -s --max-time 5 "$api/providers/proxies/$name")
+        if [[ -n "$details" ]]; then
+            echo "$details" | jq -r '.proxies[]? | "\(.name)\t\(.history[-1].delay // 0)"' 2>/dev/null | while IFS=$'\t' read -r pname delay; do
+                if [[ "$delay" -gt 0 ]] 2>/dev/null; then
+                    echo -e "  ${GREEN}✓ $pname — ${delay}ms${NC}"
+                else
+                    echo -e "  ${RED}✗ $pname — dead${NC}"
+                fi
+            done
+        fi
+        echo ""
+    done <<< "$proxy_providers"
+}
+
 do_help() {
     local port
     port=$(get_proxy_port 2>/dev/null || echo "7890")
@@ -838,6 +923,8 @@ do_help() {
     echo "  update      Синоним restart"
     echo "  status      Показать статус"
     echo "  check       Проверить доступ к сайтам через прокси"
+    echo "  update-providers  Обновить прокси и правила"
+    echo "  healthcheck       Проверить какие ноды живые"
     echo "  log         Показать логи в реальном времени"
     echo "  uninstall   Полностью удалить Dostup VPN"
     echo "  help        Эта справка"
@@ -853,6 +940,8 @@ case "${1:-help}" in
     restart|update)  do_update ;;
     status)          do_status ;;
     check)           do_check ;;
+    update-providers)    do_update_providers ;;
+    healthcheck)         do_healthcheck ;;
     log)             do_log ;;
     uninstall)       do_uninstall ;;
     help)            do_help ;;

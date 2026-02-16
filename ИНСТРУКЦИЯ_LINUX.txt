@@ -31,17 +31,21 @@
 
 Команды управления:
 
-   ┌───────────────────────────────────────────┐
-   │  sudo dostup start     │ Запустить VPN    │
-   │  sudo dostup stop      │ Остановить VPN   │
-   │  sudo dostup restart   │ Перезапуск +     │
-   │                        │ обновление       │
-   │  sudo dostup status    │ Показать статус  │
-   │  dostup check          │ Проверить доступ │
-   │  dostup log            │ Логи (live)      │
-   │  sudo dostup uninstall │ Удалить          │
-   │  dostup help           │ Справка          │
-   └───────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────┐
+   │  sudo dostup start            │ Запустить VPN      │
+   │  sudo dostup stop             │ Остановить VPN     │
+   │  sudo dostup restart          │ Перезапуск +       │
+   │                               │ обновление         │
+   │  sudo dostup status           │ Показать статус    │
+   │  dostup check                 │ Проверить доступ   │
+   │  dostup update-providers      │ Обновить прокси    │
+   │                               │ и правила          │
+   │  dostup healthcheck           │ Проверить какие    │
+   │                               │ ноды живые         │
+   │  dostup log                   │ Логи (live)        │
+   │  sudo dostup uninstall        │ Удалить            │
+   │  dostup help                  │ Справка            │
+   └──────────────────────────────────────────────────────┘
 
 -------------------------------------
 ПРОВЕРКА ДОСТУПА
