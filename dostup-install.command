@@ -731,7 +731,33 @@ do_start_quick() {
     fi
 }
 
+check_script_update() {
+    local current_hash
+    current_hash=$(read_settings "installer_hash")
+    [[ -z "$current_hash" ]] && return 0
+
+    local url="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command"
+    local tmp="/tmp/dostup-installer-check"
+    if curl -sL --max-time 10 "$url" -o "$tmp" 2>/dev/null; then
+        local new_hash
+        new_hash=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
+        if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
+            echo ""
+            echo -e "${YELLOW}▶ Доступно обновление скрипта управления${NC}"
+            printf "  Обновить сейчас? (y/N): "
+            read -r choice
+            if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+                echo -e "${YELLOW}▶ Обновление...${NC}"
+                bash "$tmp"
+                exit 0
+            fi
+        fi
+        rm -f "$tmp"
+    fi
+}
+
 do_start() {
+    check_script_update
     do_update_core
     do_update_config
 
@@ -1991,6 +2017,12 @@ create_sudoers_entry
 
 # LaunchDaemon для mihomo (системный сервис)
 create_launch_daemon
+
+# Save installer hash for self-update detection
+installer_hash=$(curl -sL --max-time 10 "https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command" | shasum -a 256 | cut -d' ' -f1)
+if [[ -n "$installer_hash" ]]; then
+    update_settings "installer_hash" "$installer_hash"
+fi
 
 # Первый запуск
 echo ""

@@ -483,6 +483,17 @@ if ($geoSuccess) {
 $settingsJson = $settings | ConvertTo-Json
 [System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, (New-Object System.Text.UTF8Encoding($false)))
 
+# Save installer hash for self-update
+try {
+    $installerContent = (Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1' -UseBasicParsing -TimeoutSec 10).Content
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($installerContent)
+    $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-','').ToLower()
+    $settings.installer_hash = $hash
+    $settingsJson = $settings | ConvertTo-Json
+    [System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, (New-Object System.Text.UTF8Encoding($false)))
+} catch {}
+
 # Create sites.json for access checking
 $sitesFile = "$DOSTUP_DIR\sites.json"
 if (-not (Test-Path $sitesFile)) {
@@ -843,7 +854,34 @@ function Save-Settings($s) {
     [System.IO.File]::WriteAllText($SETTINGS_FILE, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Test-InstallerUpdate {
+    try {
+        $s = Get-Content $SETTINGS_FILE -Raw | ConvertFrom-Json
+        if (-not $s.installer_hash) { return }
+
+        $url = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1'
+        $content = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10).Content
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
+        $newHash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-','').ToLower()
+
+        if ($newHash -ne $s.installer_hash) {
+            Write-Host ''
+            Write-Warning 'Доступно обновление скрипта управления'
+            $choice = Read-Host '  Обновить сейчас? (y/N)'
+            if ($choice -eq 'y' -or $choice -eq 'Y') {
+                Write-Step 'Обновление...'
+                $tmp = "$env:TEMP\dostup-install-update.ps1"
+                [System.IO.File]::WriteAllText($tmp, $content, (New-Object System.Text.UTF8Encoding($false)))
+                & powershell -ExecutionPolicy Bypass -File $tmp
+                exit
+            }
+        }
+    } catch {}
+}
+
 function Start-Mihomo {
+    Test-InstallerUpdate
     # Read settings with fallback
     $settings = $null
     try {

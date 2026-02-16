@@ -628,8 +628,34 @@ do_stop() {
     print_success "Dostup остановлен"
 }
 
+check_script_update() {
+    local current_hash
+    current_hash=$(read_settings "installer_hash")
+    [[ -z "$current_hash" ]] && return 0
+
+    local url="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh"
+    local tmp="/tmp/dostup-installer-check"
+    if curl -sL --max-time 10 "$url" -o "$tmp" 2>/dev/null; then
+        local new_hash
+        new_hash=$(sha256sum "$tmp" | cut -d' ' -f1)
+        if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
+            echo ""
+            echo -e "${YELLOW}▶ Доступно обновление скрипта управления${NC}"
+            printf "  Обновить сейчас? (y/N): "
+            read -r choice
+            if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+                echo -e "${YELLOW}▶ Обновление...${NC}"
+                sudo bash "$tmp"
+                exit 0
+            fi
+        fi
+        rm -f "$tmp"
+    fi
+}
+
 do_update() {
     require_root "restart"
+    check_script_update
 
     # 1. Проверка обновления ядра
     print_step "Проверка обновлений ядра..."
@@ -1098,6 +1124,12 @@ install_service
 
 # Установка CLI-обёртки
 install_cli
+
+# Save installer hash for self-update
+installer_hash=$(curl -sL --max-time 10 "https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh" | sha256sum | cut -d' ' -f1)
+if [[ -n "$installer_hash" ]]; then
+    update_settings "installer_hash" "$installer_hash"
+fi
 
 # Первый запуск
 if start_service; then
