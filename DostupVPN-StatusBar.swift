@@ -292,7 +292,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let api = "http://127.0.0.1:9090"
             var summaryLines: [String] = []
-            var hasErrors = false
             let semaphore = DispatchSemaphore(value: 0)
 
             if let url = URL(string: "\(api)/providers/proxies"),
@@ -332,15 +331,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                             summaryLines.append("\(name): \(alive)/\(total) (avg \(avg)ms)")
                         } else {
                             summaryLines.append("\(name): 0/\(total)")
-                            hasErrors = true
                         }
                     } else {
                         summaryLines.append("\(name): \u{043E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430}")
-                        hasErrors = true
                     }
                 }
             } else {
-                hasErrors = true
                 summaryLines.append("\u{041D}\u{0435}\u{0442} \u{0434}\u{0430}\u{043D}\u{043D}\u{044B}\u{0445}")
             }
 
@@ -415,7 +411,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .sound])
+        completionHandler([.alert, .sound])
     }
 
     private func showNotification(title: String, text: String) {
