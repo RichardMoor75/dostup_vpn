@@ -26,6 +26,7 @@ MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/late
 GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
 GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
 ICON_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon.icns"
+ICON_APP_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon_app.png"
 ICON_ON_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon_on.png"
 ICON_OFF_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/icon_off.png"
 
@@ -1117,6 +1118,8 @@ download_icon() {
     else
         print_warning "Не удалось скачать иконку (будет использована стандартная)"
     fi
+    # Иконка приложения для уведомлений (512x512 PNG)
+    download_with_retry "$ICON_APP_URL" "$DOSTUP_DIR/icon_app.png" 2>/dev/null || true
     # Иконки для статусбара (36x36 PNG)
     mkdir -p "$DOSTUP_DIR/statusbar"
     download_with_retry "$ICON_ON_URL" "$DOSTUP_DIR/statusbar/icon_on.png" 2>/dev/null || true
@@ -1236,7 +1239,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Устанавливаем иконку приложения для уведомлений
-        if let appIcon = NSImage(contentsOfFile: homeDir + "/dostup/icon.icns") {
+        if let appIcon = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png") {
             NSApplication.shared.applicationIconImage = appIcon
         }
         loadIcons()

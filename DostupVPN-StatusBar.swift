@@ -25,7 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Устанавливаем иконку приложения для уведомлений
-        if let appIcon = NSImage(contentsOfFile: homeDir + "/dostup/icon.icns") {
+        if let appIcon = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png") {
             NSApplication.shared.applicationIconImage = appIcon
         }
         loadIcons()
