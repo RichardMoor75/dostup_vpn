@@ -413,6 +413,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let notification = NSUserNotification()
         notification.title = title
         notification.informativeText = text
+        notification.contentImage = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png")
         NSUserNotificationCenter.default.deliver(notification)
     }
 }
