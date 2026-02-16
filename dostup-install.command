@@ -477,6 +477,34 @@ validate_yaml() {
     ! echo "$content" | grep -qiE '<!DOCTYPE|<html|<head' && echo "$content" | grep -qE '^[a-zA-Z_-]+:|^\s*-\s+'
 }
 
+# --- API-функции (парсинг JSON через osascript, без python3) ---
+
+get_proxy_providers() {
+    local tmp="/tmp/dostup_api_$$.json"
+    curl -s --max-time 5 "http://127.0.0.1:9090/providers/proxies" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return; }
+    osascript -l JavaScript -e "var data = $.NSData.dataWithContentsOfFile('$tmp'); if (data && data.length > 0) { var str = $.NSString.alloc.initWithDataEncoding(data, 4).js; var o = JSON.parse(str).providers || {}; Object.keys(o).filter(function(k){return k!=='default'}).join('\n'); } else { '' }" 2>/dev/null
+    rm -f "$tmp"
+}
+
+get_rule_providers() {
+    local tmp="/tmp/dostup_api_$$.json"
+    curl -s --max-time 5 "http://127.0.0.1:9090/providers/rules" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return; }
+    osascript -l JavaScript -e "var data = $.NSData.dataWithContentsOfFile('$tmp'); if (data && data.length > 0) { var str = $.NSString.alloc.initWithDataEncoding(data, 4).js; var o = JSON.parse(str).providers || {}; Object.keys(o).join('\n'); } else { '' }" 2>/dev/null
+    rm -f "$tmp"
+}
+
+parse_healthcheck() {
+    local name="$1"
+    local tmp="/tmp/dostup_api_$$.json"
+    curl -s --max-time 5 "http://127.0.0.1:9090/providers/proxies/$name" -o "$tmp" 2>/dev/null
+    if [ -s "$tmp" ]; then
+        osascript -l JavaScript -e "var data = $.NSData.dataWithContentsOfFile('$tmp'); if (data && data.length > 0) { var str = $.NSString.alloc.initWithDataEncoding(data, 4).js; var obj = JSON.parse(str); var proxies = obj.proxies || []; var alive = 0, total = 0, lines = []; for (var i = 0; i < proxies.length; i++) { var p = proxies[i]; var nm = p.name || '?'; var h = p.history || []; var delay = h.length > 0 ? h[h.length-1].delay : 0; total++; if (delay > 0) { alive++; lines.push('  ✓ ' + nm + ' — ' + delay + 'ms'); } else { lines.push('  ✗ ' + nm + ' — мёртв'); } } lines.push('  Итого: ' + alive + '/' + total + ' нод'); lines.join('\n'); } else { '  ✗ Ошибка парсинга' }" 2>/dev/null
+    else
+        echo "  ✗ Не удалось получить данные"
+    fi
+    rm -f "$tmp"
+}
+
 # --- DNS-функции ---
 
 DNS_CONF="$DOSTUP_DIR/original_dns.conf"
@@ -898,7 +926,7 @@ if [[ -n "$1" ]]; then
             ;;
         update-providers)
             echo "Обновление провайдеров..."
-            proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys() if k != 'default']" 2>/dev/null)
+            proxy_providers=$(get_proxy_providers)
             if [ -n "$proxy_providers" ]; then
                 while IFS= read -r name; do
                     curl -s -X PUT --max-time 15 "http://127.0.0.1:9090/providers/proxies/$name" && echo "✓ $name" || echo "✗ $name"
@@ -906,7 +934,7 @@ if [[ -n "$1" ]]; then
             else
                 echo "✗ Не удалось получить список прокси-провайдеров"
             fi
-            rule_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/rules | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys()]" 2>/dev/null)
+            rule_providers=$(get_rule_providers)
             if [ -n "$rule_providers" ]; then
                 while IFS= read -r name; do
                     curl -s -X PUT --max-time 15 "http://127.0.0.1:9090/providers/rules/$name" && echo "✓ $name" || echo "✗ $name"
@@ -923,39 +951,12 @@ if [[ -n "$1" ]]; then
         healthcheck)
             echo "Проверка нод..."
             echo ""
-            proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys() if k != 'default']" 2>/dev/null)
+            proxy_providers=$(get_proxy_providers)
             if [ -n "$proxy_providers" ]; then
                 while IFS= read -r name; do
-                    # Run healthcheck
                     curl -s --max-time 30 "http://127.0.0.1:9090/providers/proxies/$name/healthcheck" > /dev/null 2>&1
-                    # Get detailed results
                     echo "[$name]"
-                    details=$(curl -s --max-time 5 "http://127.0.0.1:9090/providers/proxies/$name")
-                    if [ -n "$details" ]; then
-                        echo "$details" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    proxies = data.get('proxies', [])
-    alive = 0
-    total = 0
-    for p in proxies:
-        name = p.get('name', '?')
-        history = p.get('history', [])
-        delay = history[-1]['delay'] if history else 0
-        total += 1
-        if delay > 0:
-            alive += 1
-            print(f'  ✓ {name} — {delay}ms')
-        else:
-            print(f'  ✗ {name} — мёртв')
-    print(f'  Итого: {alive}/{total} нод')
-except:
-    print('  ✗ Ошибка парсинга')
-" 2>/dev/null
-                    else
-                        echo "  ✗ Не удалось получить данные"
-                    fi
+                    parse_healthcheck "$name"
                     echo ""
                 done <<< "$proxy_providers"
             else
@@ -1029,7 +1030,7 @@ if pgrep -x "mihomo" > /dev/null; then
         3)
             echo ""
             echo "Обновление провайдеров..."
-            proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys() if k != 'default']" 2>/dev/null)
+            proxy_providers=$(get_proxy_providers)
             if [ -n "$proxy_providers" ]; then
                 while IFS= read -r name; do
                     curl -s -X PUT --max-time 15 "http://127.0.0.1:9090/providers/proxies/$name" && echo "✓ $name" || echo "✗ $name"
@@ -1037,7 +1038,7 @@ if pgrep -x "mihomo" > /dev/null; then
             else
                 echo "✗ Не удалось получить список прокси-провайдеров"
             fi
-            rule_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/rules | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys()]" 2>/dev/null)
+            rule_providers=$(get_rule_providers)
             if [ -n "$rule_providers" ]; then
                 while IFS= read -r name; do
                     curl -s -X PUT --max-time 15 "http://127.0.0.1:9090/providers/rules/$name" && echo "✓ $name" || echo "✗ $name"
@@ -1055,39 +1056,12 @@ if pgrep -x "mihomo" > /dev/null; then
             echo ""
             echo "Проверка нод..."
             echo ""
-            proxy_providers=$(curl -s --max-time 5 http://127.0.0.1:9090/providers/proxies | python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin).get('providers',{}).keys() if k != 'default']" 2>/dev/null)
+            proxy_providers=$(get_proxy_providers)
             if [ -n "$proxy_providers" ]; then
                 while IFS= read -r name; do
-                    # Run healthcheck
                     curl -s --max-time 30 "http://127.0.0.1:9090/providers/proxies/$name/healthcheck" > /dev/null 2>&1
-                    # Get detailed results
                     echo "[$name]"
-                    details=$(curl -s --max-time 5 "http://127.0.0.1:9090/providers/proxies/$name")
-                    if [ -n "$details" ]; then
-                        echo "$details" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    proxies = data.get('proxies', [])
-    alive = 0
-    total = 0
-    for p in proxies:
-        name = p.get('name', '?')
-        history = p.get('history', [])
-        delay = history[-1]['delay'] if history else 0
-        total += 1
-        if delay > 0:
-            alive += 1
-            print(f'  ✓ {name} — {delay}ms')
-        else:
-            print(f'  ✗ {name} — мёртв')
-    print(f'  Итого: {alive}/{total} нод')
-except:
-    print('  ✗ Ошибка парсинга')
-" 2>/dev/null
-                    else
-                        echo "  ✗ Не удалось получить данные"
-                    fi
+                    parse_healthcheck "$name"
                     echo ""
                 done <<< "$proxy_providers"
             else
@@ -1723,10 +1697,8 @@ SBPLIST
         print_info "Не удалось скачать, попытка компиляции..."
 
         # --- Способ 2 (fallback): компиляция через swiftc ---
-        # Надёжная проверка наличия Xcode CLT (command -v swiftc ненадёжна — macOS shim)
-        local dev_dir
-        dev_dir=$(xcode-select -p 2>/dev/null)
-        if [[ -n "$dev_dir" ]] && [[ -x "${dev_dir}/usr/bin/swiftc" ]]; then
+        # pkgutil не является шимом и не вызывает диалог установки CLT
+        if pkgutil --pkg-info=com.apple.pkg.CLTools_Executables &>/dev/null; then
             print_info "Компиляция Swift (это может занять несколько секунд)..."
             if swiftc -O -o "$binary_path" \
                 -framework Cocoa \
