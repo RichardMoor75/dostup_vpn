@@ -175,6 +175,27 @@ function Get-FileSHA256($path) {
     }
 }
 
+function Get-InstallerHash($fallbackHash = '') {
+    $tmpHash = "$env:TEMP\dostup-installer-hash.ps1"
+    try {
+        if (Invoke-DownloadWithRetry 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1' $tmpHash 3) {
+            if ((Test-Path $tmpHash) -and ((Get-Item $tmpHash).Length -gt 0)) {
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                try {
+                    $rawBytes = [System.IO.File]::ReadAllBytes($tmpHash)
+                    if ($rawBytes.Length -gt 0) {
+                        return [BitConverter]::ToString($sha.ComputeHash($rawBytes)).Replace('-','').ToLower()
+                    }
+                } finally {
+                    $sha.Dispose()
+                }
+            }
+        }
+    } catch { }
+    Remove-Item $tmpHash -Force -ErrorAction SilentlyContinue
+    return $fallbackHash
+}
+
 function Backup-Config {
     if (Test-Path $CONFIG_FILE) {
         Copy-Item $CONFIG_FILE "$CONFIG_FILE.backup" -Force
@@ -195,10 +216,14 @@ Write-Host ''
 
 # Save old subscription if exists
 $oldSubUrl = ''
+$oldInstallerHash = ''
 if (Test-Path $SETTINGS_FILE) {
     try {
         $oldSettings = Get-Content $SETTINGS_FILE -Raw | ConvertFrom-Json
         $oldSubUrl = $oldSettings.subscription_url
+        if ($oldSettings.PSObject.Properties['installer_hash']) {
+            $oldInstallerHash = $oldSettings.installer_hash
+        }
     } catch { }
 }
 
@@ -479,22 +504,16 @@ $settings = @{
 if ($geoSuccess) {
     $settings.last_geo_update = (Get-Date -Format 'yyyy-MM-dd')
 }
+
+# Save installer hash for self-update (retry + fallback to previous value)
+$installerHash = Get-InstallerHash $oldInstallerHash
+if (-not [string]::IsNullOrEmpty($installerHash)) {
+    $settings.installer_hash = $installerHash
+}
+
 # Write JSON without BOM for old PowerShell compatibility
 $settingsJson = $settings | ConvertTo-Json
 [System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, (New-Object System.Text.UTF8Encoding($false)))
-
-# Save installer hash for self-update (raw bytes to avoid encoding issues)
-try {
-    $tmpHash = "$env:TEMP\dostup-installer-hash.ps1"
-    Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1' -UseBasicParsing -TimeoutSec 10 -OutFile $tmpHash
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    $rawBytes = [System.IO.File]::ReadAllBytes($tmpHash)
-    $hash = [BitConverter]::ToString($sha.ComputeHash($rawBytes)).Replace('-','').ToLower()
-    Remove-Item $tmpHash -Force -ErrorAction SilentlyContinue
-    $settings.installer_hash = $hash
-    $settingsJson = $settings | ConvertTo-Json
-    [System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, (New-Object System.Text.UTF8Encoding($false)))
-} catch {}
 
 # Create sites.json for access checking
 $sitesFile = "$DOSTUP_DIR\sites.json"
