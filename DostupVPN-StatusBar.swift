@@ -24,6 +24,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Application Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Устанавливаем иконку приложения для уведомлений
+        if let appIcon = NSImage(contentsOfFile: homeDir + "/dostup/icon.icns") {
+            NSApplication.shared.applicationIconImage = appIcon
+        }
         loadIcons()
         setupStatusItem()
         setupMenu()
