@@ -79,9 +79,10 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Проверки нод (healthcheck — какие прокси живые)
 - Проверки доступа к заблокированным ресурсам
 
-На Linux используй `sudo dostup start|stop|restart|status|check|log`.
+На Linux используй `sudo dostup start|stop|restart|status|check|update-providers|healthcheck|log`.
 
 При каждом запуске автоматически проверяются обновления:
+- Скрипт управления (сравнение SHA256 с версией на GitHub)
 - Ядро Mihomo (при наличии новой версии)
 - Конфиг (скачивается заново)
 - Geo-базы (раз в 2 недели)
