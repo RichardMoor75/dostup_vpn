@@ -483,12 +483,14 @@ if ($geoSuccess) {
 $settingsJson = $settings | ConvertTo-Json
 [System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, (New-Object System.Text.UTF8Encoding($false)))
 
-# Save installer hash for self-update
+# Save installer hash for self-update (raw bytes to avoid encoding issues)
 try {
-    $installerContent = (Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1' -UseBasicParsing -TimeoutSec 10).Content
+    $tmpHash = "$env:TEMP\dostup-installer-hash.ps1"
+    Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1' -UseBasicParsing -TimeoutSec 10 -OutFile $tmpHash
     $sha = [System.Security.Cryptography.SHA256]::Create()
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($installerContent)
-    $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-','').ToLower()
+    $rawBytes = [System.IO.File]::ReadAllBytes($tmpHash)
+    $hash = [BitConverter]::ToString($sha.ComputeHash($rawBytes)).Replace('-','').ToLower()
+    Remove-Item $tmpHash -Force -ErrorAction SilentlyContinue
     $settings.installer_hash = $hash
     $settingsJson = $settings | ConvertTo-Json
     [System.IO.File]::WriteAllText($SETTINGS_FILE, $settingsJson, (New-Object System.Text.UTF8Encoding($false)))
@@ -860,25 +862,28 @@ function Test-InstallerUpdate {
         if (-not $s.installer_hash) { return }
 
         $url = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1'
-        # Retry: сеть может быть не готова сразу после остановки VPN
-        $content = $null
+        # Скачиваем в файл чтобы хешировать сырые байты (без encoding-преобразований)
+        $tmpFile = "$env:TEMP\dostup-installer-check.ps1"
+        $downloaded = $false
         for ($retry = 0; $retry -lt 3; $retry++) {
             try {
-                $content = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 15).Content
+                Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 15 -OutFile $tmpFile
+                $downloaded = $true
                 break
             } catch {
                 if ($retry -lt 2) { Start-Sleep -Seconds 2 }
             }
         }
-        if (-not $content) { return }
+        if (-not $downloaded -or -not (Test-Path $tmpFile)) { return }
 
         $sha = [System.Security.Cryptography.SHA256]::Create()
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
-        $newHash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-','').ToLower()
+        $rawBytes = [System.IO.File]::ReadAllBytes($tmpFile)
+        $newHash = [BitConverter]::ToString($sha.ComputeHash($rawBytes)).Replace('-','').ToLower()
 
         if ($newHash -ne $s.installer_hash) {
             if ($env:DOSTUP_SILENT -eq '1') {
                 Write-Output 'DOSTUP_SCRIPT_UPDATE'
+                Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
                 return
             }
             Write-Host ''
@@ -886,12 +891,11 @@ function Test-InstallerUpdate {
             $choice = Read-Host '  Обновить сейчас? (y/N)'
             if ($choice -eq 'y' -or $choice -eq 'Y') {
                 Write-Step 'Обновление...'
-                $tmp = "$env:TEMP\dostup-install-update.ps1"
-                [System.IO.File]::WriteAllText($tmp, $content, (New-Object System.Text.UTF8Encoding($false)))
-                & powershell -ExecutionPolicy Bypass -File $tmp
+                & powershell -ExecutionPolicy Bypass -File $tmpFile
                 exit
             }
         }
+        Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
     } catch {}
 }
 
