@@ -1202,6 +1202,10 @@ create_statusbar_app() {
     mkdir -p "$app_path/Contents/Resources"
 
     # Иконки для статусбара уже скачаны в download_icon()
+    # Копируем иконку приложения для уведомлений
+    if [[ -f "$DOSTUP_DIR/icon.icns" ]]; then
+        cp "$DOSTUP_DIR/icon.icns" "$app_path/Contents/Resources/AppIcon.icns"
+    fi
 
     # Записываем Swift-исходник
     cat > "$statusbar_dir/DostupVPN-StatusBar.swift" << 'SWIFTSOURCE'
@@ -1657,6 +1661,8 @@ SWIFTSOURCE
     <string>DostupVPN-StatusBar</string>
     <key>CFBundleIdentifier</key>
     <string>ru.dostup.vpn.statusbar</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>Dostup VPN Status Bar</string>
     <key>CFBundlePackageType</key>
