@@ -815,6 +815,27 @@ function Write-OK($t) { Write-Host "[OK] $t" -ForegroundColor Green }
 function Write-Fail($t) { Write-Host "[FAIL] $t" -ForegroundColor Red }
 function Write-Info($t) { Write-Host "[i] $t" -ForegroundColor Blue }
 
+function Start-TrayApplication {
+    $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
+    $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
+
+    if (Test-Path $trayScript) {
+        try {
+            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden -ErrorAction Stop
+            return $true
+        } catch { }
+    }
+
+    if (Test-Path $trayVbs) {
+        try {
+            Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden -ErrorAction Stop
+            return $true
+        } catch { }
+    }
+
+    return $false
+}
+
 function Test-CurlAvailable {
     return ($null -ne (Get-Command curl.exe -ErrorAction SilentlyContinue))
 }
