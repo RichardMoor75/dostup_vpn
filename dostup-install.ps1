@@ -480,15 +480,41 @@ if ($parallelAvailable) {
     $iconOnJob = Invoke-DownloadWithRetryJob $ICON_ON_URL $iconOnPath
     $iconOffJob = Invoke-DownloadWithRetryJob $ICON_OFF_URL $iconOffPath
 
-    $allJobs = @($geoIpJob, $geoSiteJob, $iconJob, $iconOnJob, $iconOffJob) | Where-Object { $_ -ne $null }
+    $jobItems = @(
+        @{ Name = 'geoip.dat'; Job = $geoIpJob }
+        @{ Name = 'geosite.dat'; Job = $geoSiteJob }
+        @{ Name = 'icon.ico'; Job = $iconJob }
+        @{ Name = 'icon_on.png'; Job = $iconOnJob }
+        @{ Name = 'icon_off.png'; Job = $iconOffJob }
+    )
+    $allJobs = $jobItems | Where-Object { $_.Job -ne $null }
     if ($allJobs.Count -eq 5) {
-        Wait-Job -Job $allJobs | Out-Null
+        $totalJobs = $allJobs.Count
+        $reported = @{}
+        $jobNames = @{}
+        foreach ($item in $allJobs) {
+            $jobNames[[string]$item.Job.Id] = $item.Name
+        }
+        Write-Info "Параллельные загрузки запущены (0/$totalJobs)..."
+        while ($reported.Count -lt $totalJobs) {
+            $finishedJobs = @(Wait-Job -Job ($allJobs | ForEach-Object { $_.Job }) -Any -Timeout 1)
+            foreach ($finished in $finishedJobs) {
+                if (-not $finished) { continue }
+                $jobId = [string]$finished.Id
+                if (-not $reported.ContainsKey($jobId)) {
+                    $reported[$jobId] = $true
+                    $jobName = $jobNames[$jobId]
+                    Write-Info ("Завершено: {0} ({1}/{2})" -f $jobName, $reported.Count, $totalJobs)
+                }
+            }
+        }
+
         $geoIpOk = [bool](Receive-Job $geoIpJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
         $geoSiteOk = [bool](Receive-Job $geoSiteJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
         $iconOk = [bool](Receive-Job $iconJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
         $iconOnOk = [bool](Receive-Job $iconOnJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
         $iconOffOk = [bool](Receive-Job $iconOffJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
-        Remove-Job -Job $allJobs -Force -ErrorAction SilentlyContinue
+        Remove-Job -Job ($allJobs | ForEach-Object { $_.Job }) -Force -ErrorAction SilentlyContinue
 
         if (-not $geoIpOk) { Write-Fail 'Failed to download geoip.dat'; $geoSuccess = $false }
         if (-not $geoSiteOk) { Write-Fail 'Failed to download geosite.dat'; $geoSuccess = $false }
@@ -496,7 +522,7 @@ if ($parallelAvailable) {
         if ($iconOk) { Write-OK 'Icon downloaded' } else { Write-Fail 'Icon download failed (shortcut will use default icon)' }
         if ($iconOnOk -and $iconOffOk) { Write-OK 'Tray icons downloaded' } else { Write-Info 'Tray icons download failed (will use fallback icon)' }
     } else {
-        foreach ($j in $allJobs) { Remove-Job $j -Force -ErrorAction SilentlyContinue }
+        foreach ($j in $allJobs) { Remove-Job $j.Job -Force -ErrorAction SilentlyContinue }
         $parallelAvailable = $false
     }
 }
