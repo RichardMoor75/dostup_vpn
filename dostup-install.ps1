@@ -110,6 +110,13 @@ function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
                 Remove-Item $output -Force -ErrorAction SilentlyContinue
                 if ($useCurl) {
                     try {
+                        & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                    } catch { }
+                    if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                        return $true
+                    }
+                    Remove-Item $output -Force -ErrorAction SilentlyContinue
+                    try {
                         & curl.exe -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
                     } catch { }
                     if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
@@ -142,6 +149,13 @@ function Invoke-DownloadWithRetry($url, $output, $maxRetries = 3) {
     while ($retry -lt $maxRetries) {
         Remove-Item $output -Force -ErrorAction SilentlyContinue
         if ($useCurl) {
+            try {
+                & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+            } catch { }
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                return $true
+            }
+            Remove-Item $output -Force -ErrorAction SilentlyContinue
             try {
                 & curl.exe -fL --connect-timeout 10 --max-time 120 -# -o $output $url
             } catch { }
@@ -544,24 +558,50 @@ if ($parallelAvailable) {
     if ($allJobs.Count -eq 5) {
         $totalJobs = $allJobs.Count
         $reported = @{}
+        $reportedNames = @{}
         $jobNames = @{}
+        $terminalStates = @('Completed', 'Failed', 'Stopped')
+        $requiredDoneAt = $null
+        $hardDeadline = (Get-Date).AddMinutes(15)
         foreach ($item in $allJobs) {
             $jobNames[[string]$item.Job.Id] = $item.Name
         }
         Write-Info "Параллельные загрузки запущены (0/$totalJobs)..."
         while ($reported.Count -lt $totalJobs) {
-            $finishedJobs = @(Wait-Job -Job ($allJobs | ForEach-Object { $_.Job }) -Any -Timeout 1)
-            foreach ($finished in $finishedJobs) {
-                if (-not $finished) { continue }
-                $jobId = [string]$finished.Id
-                if (-not $reported.ContainsKey($jobId)) {
+            foreach ($item in $allJobs) {
+                if (-not $item.Job) { continue }
+                $jobId = [string]$item.Job.Id
+                if ($reported.ContainsKey($jobId)) { continue }
+                if ($terminalStates -contains $item.Job.State) {
                     $reported[$jobId] = $true
                     $jobName = $jobNames[$jobId]
+                    $reportedNames[$jobName] = $true
                     Write-Info ("Завершено: {0} ({1}/{2})" -f $jobName, $reported.Count, $totalJobs)
                 }
             }
+
+            $requiredDone = $reportedNames.ContainsKey('geoip.dat') -and $reportedNames.ContainsKey('geosite.dat')
+            if ($requiredDone -and $reported.Count -lt $totalJobs) {
+                if (-not $requiredDoneAt) {
+                    $requiredDoneAt = Get-Date
+                } elseif (((Get-Date) - $requiredDoneAt).TotalSeconds -ge 15) {
+                    Write-Info 'Оставшиеся загрузки иконок заняли слишком много времени, продолжаем установку'
+                    break
+                }
+            }
+
+            if ((Get-Date) -gt $hardDeadline) {
+                Write-Info 'Истек таймаут ожидания параллельных загрузок, продолжаем установку'
+                break
+            }
+
+            Start-Sleep -Milliseconds 500
         }
 
+        $runningJobs = @($allJobs | ForEach-Object { $_.Job } | Where-Object { $_.State -eq 'Running' })
+        if ($runningJobs.Count -gt 0) {
+            Stop-Job -Job $runningJobs -Force -ErrorAction SilentlyContinue
+        }
         $geoIpOk = [bool](Receive-Job $geoIpJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
         $geoSiteOk = [bool](Receive-Job $geoSiteJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
         $iconOk = [bool](Receive-Job $iconJob -ErrorAction SilentlyContinue | Select-Object -Last 1)
@@ -670,6 +710,13 @@ function Invoke-DownloadWithRetry($url, $output) {
     while ($retry -lt 3) {
         Remove-Item $output -Force -ErrorAction SilentlyContinue
         if ($useCurl) {
+            try {
+                & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+            } catch { }
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                return $true
+            }
+            Remove-Item $output -Force -ErrorAction SilentlyContinue
             try {
                 & curl.exe -fL --connect-timeout 10 --max-time 120 -# -o $output $url
             } catch { }
