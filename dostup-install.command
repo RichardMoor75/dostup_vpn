@@ -302,6 +302,13 @@ download_with_retry() {
     local tmp_output="${output}.part"
 
     while [[ $retry -lt $max_retries ]]; do
+        if curl -4 -fL --connect-timeout 10 --speed-time 30 --speed-limit 1024 -# -o "$tmp_output" "$url"; then
+            if [[ -s "$tmp_output" ]]; then
+                mv "$tmp_output" "$output"
+                return 0
+            fi
+        fi
+        rm -f "$tmp_output"
         if curl -fL --connect-timeout 10 --speed-time 30 --speed-limit 1024 -# -o "$tmp_output" "$url"; then
             if [[ -s "$tmp_output" ]]; then
                 mv "$tmp_output" "$output"
@@ -627,6 +634,13 @@ download_with_retry() {
     local retry=0
     local tmp_output="${output}.part"
     while [[ $retry -lt 3 ]]; do
+        if curl -4 -fL --connect-timeout 10 --speed-time 30 --speed-limit 1024 -# -o "$tmp_output" "$url"; then
+            if [[ -s "$tmp_output" ]]; then
+                mv "$tmp_output" "$output"
+                return 0
+            fi
+        fi
+        rm -f "$tmp_output"
         if curl -fL --connect-timeout 10 --speed-time 30 --speed-limit 1024 -# -o "$tmp_output" "$url"; then
             if [[ -s "$tmp_output" ]]; then
                 mv "$tmp_output" "$output"
