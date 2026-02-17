@@ -1413,6 +1413,9 @@ Write-Host ''
 
 $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
 if ($proc) {
+    # Ensure tray is running even when mihomo was started earlier
+    Start-TrayApplication | Out-Null
+
     # Mihomo запущен — показываем меню
     Write-Host 'Mihomo работает' -ForegroundColor Green
     Write-Host ''
