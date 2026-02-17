@@ -256,30 +256,70 @@ if (Test-Path $SETTINGS_FILE) {
     } catch { }
 }
 
-# Stop mihomo if running
-$mihomoProcess = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-if ($mihomoProcess) {
-    Write-Step 'Stopping running Mihomo...'
-    # Stop via service (if installed)
+# Stop service + mihomo before reinstall (same intent as control script Stop-Mihomo)
+$serviceExists = $false
+try {
+    sc.exe query DostupVPN 2>$null | Out-Null
+    $serviceExists = ($LASTEXITCODE -eq 0)
+} catch {
+    $serviceExists = $false
+}
+
+if ($serviceExists) {
+    Write-Step 'Stopping DostupVPN service...'
     sc.exe stop DostupVPN 2>$null | Out-Null
-    Start-Sleep -Seconds 2
-    # Non-elevated kill (for Win 7/8 process mode)
-    Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
-    # Fallback: elevated taskkill (for older installations with elevated mihomo)
-    if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
-        Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
-    }
-    # Wait with timeout
-    $stopTimeout = 10
-    while ((Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) -and $stopTimeout -gt 0) {
+
+    $serviceStopTimeout = 15
+    while ($serviceStopTimeout -gt 0) {
+        $serviceState = (sc.exe query DostupVPN 2>$null | Out-String)
+        if ($serviceState -match 'STATE\s*:\s*\d+\s+STOPPED') {
+            break
+        }
         Start-Sleep -Seconds 1
-        $stopTimeout--
+        $serviceStopTimeout--
     }
-    if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
-        Write-Fail 'Could not stop Mihomo. Please restart your computer and try again.'
-        Read-Host 'Press Enter to close'
-        exit 1
+
+    $serviceState = (sc.exe query DostupVPN 2>$null | Out-String)
+    if ($serviceState -notmatch 'STATE\s*:\s*\d+\s+STOPPED') {
+        # Fallback: request elevation for old service ACLs
+        Start-Process -FilePath 'cmd.exe' -ArgumentList '/c sc.exe stop DostupVPN' -Verb RunAs -Wait -WindowStyle Hidden
+        Start-Sleep -Seconds 2
     }
+
+    # Fallback: service wrapper may still hold files in dostup folder
+    Stop-Process -Name 'DostupVPN-Service' -Force -ErrorAction SilentlyContinue
+    if (Get-Process -Name 'DostupVPN-Service' -ErrorAction SilentlyContinue) {
+        Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM DostupVPN-Service.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    }
+}
+
+$hadMihomo = [bool](Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue)
+if ($hadMihomo) {
+    Write-Step 'Stopping running Mihomo...'
+}
+
+# Non-elevated kill (for Win 7/8 process mode)
+Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
+
+# Fallback: elevated taskkill (for older installations with elevated mihomo)
+if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+    Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+}
+
+# Wait with timeout
+$stopTimeout = 10
+while ((Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) -and $stopTimeout -gt 0) {
+    Start-Sleep -Seconds 1
+    $stopTimeout--
+}
+
+if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+    Write-Fail 'Could not stop Mihomo. Please restart your computer and try again.'
+    Read-Host 'Press Enter to close'
+    exit 1
+}
+
+if ($hadMihomo -or $serviceExists) {
     Write-OK 'Mihomo stopped'
 }
 
@@ -293,16 +333,29 @@ if ($trayProcs) {
     Write-OK 'Tray application stopped'
 }
 
+# Stop old control scripts that can lock files in $DOSTUP_DIR
+$escapedDostupDir = [regex]::Escape("$DOSTUP_DIR\")
+$controlProcs = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match $escapedDostupDir }
+if ($controlProcs) {
+    Write-Step 'Stopping old control scripts...'
+    $controlProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
+    Write-OK 'Old control scripts stopped'
+}
+
 # Remove old installation
 if (Test-Path $DOSTUP_DIR) {
     Write-Step 'Removing old installation...'
-    # Retry removal in case files are still locked
-    $retries = 3
-    while ((Test-Path $DOSTUP_DIR) -and $retries -gt 0) {
+    # Retry removal in case files are still locked (self-update race)
+    $maxRetries = 12
+    for ($attempt = 1; $attempt -le $maxRetries -and (Test-Path $DOSTUP_DIR); $attempt++) {
         Remove-Item -Recurse -Force $DOSTUP_DIR -ErrorAction SilentlyContinue
         if (Test-Path $DOSTUP_DIR) {
-            Start-Sleep -Seconds 2
-            $retries--
+            if ($attempt -eq 1 -or $attempt % 3 -eq 0) {
+                Write-Info "Waiting for file locks to release... ($attempt/$maxRetries)"
+            }
+            Start-Sleep -Seconds 1
         }
     }
     if (Test-Path $DOSTUP_DIR) {
