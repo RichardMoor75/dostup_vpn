@@ -299,15 +299,21 @@ download_with_retry() {
     local output="$2"
     local max_retries=3
     local retry=0
+    local tmp_output="${output}.part"
 
     while [[ $retry -lt $max_retries ]]; do
-        if curl -fL --connect-timeout 10 --max-time 120 -# -o "$output" "$url"; then
-            return 0
+        if curl -fL --connect-timeout 10 --speed-time 30 --speed-limit 1024 -# -o "$tmp_output" "$url"; then
+            if [[ -s "$tmp_output" ]]; then
+                mv "$tmp_output" "$output"
+                return 0
+            fi
         fi
+        rm -f "$tmp_output"
         retry=$((retry + 1))
         print_info "Повтор скачивания ($retry/$max_retries)..."
         sleep 2
     done
+    rm -f "$tmp_output"
     return 1
 }
 
@@ -619,14 +625,20 @@ download_with_retry() {
     local url="$1"
     local output="$2"
     local retry=0
+    local tmp_output="${output}.part"
     while [[ $retry -lt 3 ]]; do
-        if curl -fL --connect-timeout 10 --max-time 120 -# -o "$output" "$url"; then
-            return 0
+        if curl -fL --connect-timeout 10 --speed-time 30 --speed-limit 1024 -# -o "$tmp_output" "$url"; then
+            if [[ -s "$tmp_output" ]]; then
+                mv "$tmp_output" "$output"
+                return 0
+            fi
         fi
+        rm -f "$tmp_output"
         retry=$((retry + 1))
         echo -e "${YELLOW}ℹ Повтор ($retry/3)...${NC}"
         sleep 2
     done
+    rm -f "$tmp_output"
     return 1
 }
 
