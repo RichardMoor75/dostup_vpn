@@ -1385,7 +1385,8 @@ function Start-Mihomo {
     } else {
         Start-Process cmd.exe -ArgumentList "/c powershell -ExecutionPolicy Bypass -NoProfile -File `"$DOSTUP_DIR\dns-helper.ps1`" set & `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
     }
-    if (Wait-MihomoStart 10) {
+    $startTimeout = if ($env:USERPROFILE -match '[^\x00-\x7F]') { 15 } else { 5 }
+    if (Wait-MihomoStart $startTimeout) {
         Enable-SystemProxy
         Write-Host ''
         Write-Host '============================================' -ForegroundColor Green
@@ -2299,7 +2300,8 @@ if ($serviceCreated) {
 } else {
     Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
 }
-if (Wait-MihomoStart 10) {
+$startTimeout = if ($env:USERPROFILE -match '[^\x00-\x7F]') { 15 } else { 5 }
+if (Wait-MihomoStart $startTimeout) {
     # Enable system proxy for Windows < 10
     if ($osVersion.Major -lt 10) {
         $proxyPort = Get-MixedPort
