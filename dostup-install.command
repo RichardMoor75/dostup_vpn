@@ -95,10 +95,97 @@ get_latest_version() {
     curl -s "$MIHOMO_RELEASES_API" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
 
+get_release_assets() {
+    local version="$1"
+    curl -s "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/${version}" \
+        | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        | grep '^mihomo-darwin-' || true
+}
+
+get_macos_go_tag_candidates() {
+    local macos_version
+    macos_version=$(sw_vers -productVersion 2>/dev/null || echo "")
+    local major="${macos_version%%.*}"
+
+    if [[ "$major" =~ ^[0-9]+$ ]]; then
+        if [[ "$major" -ge 13 ]]; then
+            printf '%s\n' "go124" "go122" "go120"
+        elif [[ "$major" -ge 11 ]]; then
+            printf '%s\n' "go122" "go120"
+        else
+            printf '%s\n' "go120"
+        fi
+    else
+        printf '%s\n' "go120"
+    fi
+}
+
+asset_available() {
+    local assets="$1"
+    local filename="$2"
+    [[ -z "$assets" ]] && return 0
+    echo "$assets" | grep -Fxq "$filename"
+}
+
+resolve_mihomo_filename() {
+    local arch="$1"
+    local version="$2"
+    local assets="$3"
+    local tag
+    local filename
+
+    while IFS= read -r tag; do
+        [[ -z "$tag" ]] && continue
+        if [[ "$arch" == "amd64" ]]; then
+            for filename in \
+                "mihomo-darwin-amd64-v1-${tag}-${version}.gz" \
+                "mihomo-darwin-amd64-${tag}-${version}.gz" \
+                "mihomo-darwin-amd64-compatible-${tag}-${version}.gz"; do
+                if asset_available "$assets" "$filename"; then
+                    echo "$filename"
+                    return 0
+                fi
+            done
+        else
+            filename="mihomo-darwin-arm64-${tag}-${version}.gz"
+            if asset_available "$assets" "$filename"; then
+                echo "$filename"
+                return 0
+            fi
+        fi
+    done < <(get_macos_go_tag_candidates)
+
+    if [[ "$arch" == "amd64" ]]; then
+        for filename in \
+            "mihomo-darwin-amd64-v1-${version}.gz" \
+            "mihomo-darwin-amd64-${version}.gz" \
+            "mihomo-darwin-amd64-compatible-${version}.gz" \
+            "mihomo-darwin-amd64-cgo-${version}.gz"; do
+            if asset_available "$assets" "$filename"; then
+                echo "$filename"
+                return 0
+            fi
+        done
+    else
+        for filename in \
+            "mihomo-darwin-arm64-${version}.gz" \
+            "mihomo-darwin-arm64-cgo-${version}.gz"; do
+            if asset_available "$assets" "$filename"; then
+                echo "$filename"
+                return 0
+            fi
+        done
+    fi
+
+    return 1
+}
+
 # Скачивание mihomo
 download_mihomo() {
     local arch=$(get_arch)
     local version=$(get_latest_version)
+    local assets
+    local filename
 
     if [[ -z "$version" ]]; then
         print_error "Не удалось получить версию mihomo"
@@ -107,8 +194,12 @@ download_mihomo() {
 
     print_step "Скачивание mihomo $version для $arch..."
 
-    # Формируем URL для скачивания
-    local filename="mihomo-darwin-${arch}-${version}.gz"
+    # Выбор бинарника с учетом минимальной версии macOS (go120/go122/go124)
+    assets=$(get_release_assets "$version")
+    if ! filename=$(resolve_mihomo_filename "$arch" "$version" "$assets"); then
+        print_error "Не удалось подобрать совместимый бинарник mihomo для macOS"
+        return 1
+    fi
     local download_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}"
 
     # Скачиваем с retry и прогрессом
@@ -439,6 +530,91 @@ get_latest_version() {
     curl -s "$MIHOMO_RELEASES_API" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
 
+get_release_assets() {
+    local version="$1"
+    curl -s "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/${version}" \
+        | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p' \
+        | grep '^mihomo-darwin-' || true
+}
+
+get_macos_go_tag_candidates() {
+    local macos_version
+    macos_version=$(sw_vers -productVersion 2>/dev/null || echo "")
+    local major="${macos_version%%.*}"
+
+    if [[ "$major" =~ ^[0-9]+$ ]]; then
+        if [[ "$major" -ge 13 ]]; then
+            printf '%s\n' "go124" "go122" "go120"
+        elif [[ "$major" -ge 11 ]]; then
+            printf '%s\n' "go122" "go120"
+        else
+            printf '%s\n' "go120"
+        fi
+    else
+        printf '%s\n' "go120"
+    fi
+}
+
+asset_available() {
+    local assets="$1"
+    local filename="$2"
+    [[ -z "$assets" ]] && return 0
+    echo "$assets" | grep -Fxq "$filename"
+}
+
+resolve_mihomo_filename() {
+    local arch="$1"
+    local version="$2"
+    local assets="$3"
+    local tag
+    local filename
+
+    while IFS= read -r tag; do
+        [[ -z "$tag" ]] && continue
+        if [[ "$arch" == "amd64" ]]; then
+            for filename in \
+                "mihomo-darwin-amd64-v1-${tag}-${version}.gz" \
+                "mihomo-darwin-amd64-${tag}-${version}.gz" \
+                "mihomo-darwin-amd64-compatible-${tag}-${version}.gz"; do
+                if asset_available "$assets" "$filename"; then
+                    echo "$filename"
+                    return 0
+                fi
+            done
+        else
+            filename="mihomo-darwin-arm64-${tag}-${version}.gz"
+            if asset_available "$assets" "$filename"; then
+                echo "$filename"
+                return 0
+            fi
+        fi
+    done < <(get_macos_go_tag_candidates)
+
+    if [[ "$arch" == "amd64" ]]; then
+        for filename in \
+            "mihomo-darwin-amd64-v1-${version}.gz" \
+            "mihomo-darwin-amd64-${version}.gz" \
+            "mihomo-darwin-amd64-compatible-${version}.gz" \
+            "mihomo-darwin-amd64-cgo-${version}.gz"; do
+            if asset_available "$assets" "$filename"; then
+                echo "$filename"
+                return 0
+            fi
+        done
+    else
+        for filename in \
+            "mihomo-darwin-arm64-${version}.gz" \
+            "mihomo-darwin-arm64-cgo-${version}.gz"; do
+            if asset_available "$assets" "$filename"; then
+                echo "$filename"
+                return 0
+            fi
+        done
+    fi
+
+    return 1
+}
+
 download_with_retry() {
     local url="$1"
     local output="$2"
@@ -692,12 +868,18 @@ do_update_core() {
     echo -e "${YELLOW}▶ Проверка обновлений ядра...${NC}"
     current_version=$(read_settings "installed_version")
     latest_version=$(get_latest_version)
+    local assets
+    local filename
 
     if [[ -n "$latest_version" && "$current_version" != "$latest_version" ]]; then
         echo -e "${YELLOW}▶ Обновление ядра: $current_version → $latest_version${NC}"
         arch=$(uname -m)
         [[ "$arch" == "arm64" ]] && arch="arm64" || arch="amd64"
-        filename="mihomo-darwin-${arch}-${latest_version}.gz"
+        assets=$(get_release_assets "$latest_version")
+        if ! filename=$(resolve_mihomo_filename "$arch" "$latest_version" "$assets"); then
+            echo -e "${RED}✗ Не удалось подобрать совместимый бинарник для этой версии macOS${NC}"
+            return 0
+        fi
         download_url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/${filename}"
 
         if download_with_retry "$download_url" "$DOSTUP_DIR/mihomo.gz"; then
