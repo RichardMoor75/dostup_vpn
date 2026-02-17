@@ -29,6 +29,35 @@ function Test-CurlAvailable {
     return ($null -ne (Get-Command curl.exe -ErrorAction SilentlyContinue))
 }
 
+function Test-CurlLoopbackProxyConfigured {
+    $proxyVars = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')
+    foreach ($name in $proxyVars) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value) -and $value -match '(?i)(^|://)(localhost|127\.0\.0\.1)(:\d+)?') {
+            return $true
+        }
+    }
+
+    $cfgCandidates = @(
+        "$HOME\.curlrc",
+        "$HOME\_curlrc",
+        "$env:USERPROFILE\_curlrc",
+        "$env:APPDATA\_curlrc",
+        "$env:PROGRAMDATA\curl\curlrc"
+    )
+    foreach ($cfg in $cfgCandidates) {
+        if (-not (Test-Path $cfg)) { continue }
+        try {
+            $cfgText = Get-Content $cfg -Raw -ErrorAction Stop
+            if ($cfgText -match '(?im)^\s*(--proxy|proxy)\s*(=|\s)\s*"?((https?|socks5h?)://)?(localhost|127\.0\.0\.1)(:\d+)?') {
+                return $true
+            }
+        } catch { }
+    }
+
+    return $false
+}
+
 function Test-ValidUrl($url) {
     return $url -match '^https?://'
 }
@@ -100,9 +129,10 @@ function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
         return $null
     }
     $useCurl = Test-CurlAvailable
+    $forceNoProxy = Test-CurlLoopbackProxyConfigured
     try {
         return Start-Job -ScriptBlock {
-            param($url, $output, $maxRetries, $useCurl)
+            param($url, $output, $maxRetries, $useCurl, $forceNoProxy)
             $ErrorActionPreference = 'Stop'
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             $retry = 0
@@ -110,14 +140,22 @@ function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
                 Remove-Item $output -Force -ErrorAction SilentlyContinue
                 if ($useCurl) {
                     try {
-                        & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                        if ($forceNoProxy) {
+                            & curl.exe -4 --noproxy '*' -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                        } else {
+                            & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                        }
                     } catch { }
                     if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                         return $true
                     }
                     Remove-Item $output -Force -ErrorAction SilentlyContinue
                     try {
-                        & curl.exe -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                        if ($forceNoProxy) {
+                            & curl.exe --noproxy '*' -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                        } else {
+                            & curl.exe -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                        }
                     } catch { }
                     if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                         return $true
@@ -137,7 +175,7 @@ function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
                 }
             }
             return $false
-        } -ArgumentList $url, $output, $maxRetries, $useCurl
+        } -ArgumentList $url, $output, $maxRetries, $useCurl, $forceNoProxy
     } catch {
         return $null
     }
@@ -145,19 +183,28 @@ function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
 
 function Invoke-DownloadWithRetry($url, $output, $maxRetries = 3) {
     $useCurl = Test-CurlAvailable
+    $forceNoProxy = Test-CurlLoopbackProxyConfigured
     $retry = 0
     while ($retry -lt $maxRetries) {
         Remove-Item $output -Force -ErrorAction SilentlyContinue
         if ($useCurl) {
             try {
-                & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                if ($forceNoProxy) {
+                    & curl.exe -4 --noproxy '*' -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                } else {
+                    & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                }
             } catch { }
             if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                 return $true
             }
             Remove-Item $output -Force -ErrorAction SilentlyContinue
             try {
-                & curl.exe -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                if ($forceNoProxy) {
+                    & curl.exe --noproxy '*' -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                } else {
+                    & curl.exe -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                }
             } catch { }
             if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                 return $true
@@ -704,21 +751,59 @@ function Test-CurlAvailable {
     return ($null -ne (Get-Command curl.exe -ErrorAction SilentlyContinue))
 }
 
+function Test-CurlLoopbackProxyConfigured {
+    $proxyVars = @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')
+    foreach ($name in $proxyVars) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value) -and $value -match '(?i)(^|://)(localhost|127\.0\.0\.1)(:\d+)?') {
+            return $true
+        }
+    }
+
+    $cfgCandidates = @(
+        "$HOME\.curlrc",
+        "$HOME\_curlrc",
+        "$env:USERPROFILE\_curlrc",
+        "$env:APPDATA\_curlrc",
+        "$env:PROGRAMDATA\curl\curlrc"
+    )
+    foreach ($cfg in $cfgCandidates) {
+        if (-not (Test-Path $cfg)) { continue }
+        try {
+            $cfgText = Get-Content $cfg -Raw -ErrorAction Stop
+            if ($cfgText -match '(?im)^\s*(--proxy|proxy)\s*(=|\s)\s*"?((https?|socks5h?)://)?(localhost|127\.0\.0\.1)(:\d+)?') {
+                return $true
+            }
+        } catch { }
+    }
+
+    return $false
+}
+
 function Invoke-DownloadWithRetry($url, $output) {
     $useCurl = Test-CurlAvailable
+    $forceNoProxy = Test-CurlLoopbackProxyConfigured
     $retry = 0
     while ($retry -lt 3) {
         Remove-Item $output -Force -ErrorAction SilentlyContinue
         if ($useCurl) {
             try {
-                & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                if ($forceNoProxy) {
+                    & curl.exe -4 --noproxy '*' -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                } else {
+                    & curl.exe -4 -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                }
             } catch { }
             if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                 return $true
             }
             Remove-Item $output -Force -ErrorAction SilentlyContinue
             try {
-                & curl.exe -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                if ($forceNoProxy) {
+                    & curl.exe --noproxy '*' -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                } else {
+                    & curl.exe -fL --connect-timeout 10 --max-time 120 -# -o $output $url
+                }
             } catch { }
             if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                 return $true
