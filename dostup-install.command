@@ -301,7 +301,7 @@ download_with_retry() {
     local retry=0
 
     while [[ $retry -lt $max_retries ]]; do
-        if curl -fL --connect-timeout 10 --max-time 120 -# -o "$output" "$url" 2>/dev/null; then
+        if curl -fL --connect-timeout 10 --max-time 120 -# -o "$output" "$url"; then
             return 0
         fi
         retry=$((retry + 1))
@@ -620,7 +620,7 @@ download_with_retry() {
     local output="$2"
     local retry=0
     while [[ $retry -lt 3 ]]; do
-        if curl -fL --connect-timeout 10 --max-time 120 -# -o "$output" "$url" 2>/dev/null; then
+        if curl -fL --connect-timeout 10 --max-time 120 -# -o "$output" "$url"; then
             return 0
         fi
         retry=$((retry + 1))
@@ -1301,11 +1301,11 @@ download_icon() {
         print_warning "Не удалось скачать иконку (будет использована стандартная)"
     fi
     # Иконка приложения для уведомлений (512x512 PNG)
-    download_with_retry "$ICON_APP_URL" "$DOSTUP_DIR/icon_app.png" 2>/dev/null || true
+    download_with_retry "$ICON_APP_URL" "$DOSTUP_DIR/icon_app.png" || true
     # Иконки для статусбара (36x36 PNG)
     mkdir -p "$DOSTUP_DIR/statusbar"
-    download_with_retry "$ICON_ON_URL" "$DOSTUP_DIR/statusbar/icon_on.png" 2>/dev/null || true
-    download_with_retry "$ICON_OFF_URL" "$DOSTUP_DIR/statusbar/icon_off.png" 2>/dev/null || true
+    download_with_retry "$ICON_ON_URL" "$DOSTUP_DIR/statusbar/icon_on.png" || true
+    download_with_retry "$ICON_OFF_URL" "$DOSTUP_DIR/statusbar/icon_off.png" || true
     return 0
 }
 
@@ -1388,10 +1388,11 @@ create_statusbar_app() {
     # Записываем Swift-исходник
     cat > "$statusbar_dir/DostupVPN-StatusBar.swift" << 'SWIFTSOURCE'
 import Cocoa
+import UserNotifications
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
@@ -1420,8 +1421,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         loadIcons()
         setupStatusItem()
         setupMenu()
+        setupNotifications()
         startTimer()
         updateStatus()
+    }
+
+    // MARK: - Notifications Setup
+
+    private func setupNotifications() {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
+            if !granted {
+                self?.showInlineStatusMessage("\u{0423}\u{0432}\u{0435}\u{0434}\u{043E}\u{043C}\u{043B}\u{0435}\u{043D}\u{0438}\u{044F} \u{043E}\u{0442}\u{043A}\u{043B}\u{044E}\u{0447}\u{0435}\u{043D}\u{044B} \u{0432} \u{043D}\u{0430}\u{0441}\u{0442}\u{0440}\u{043E}\u{0439}\u{043A}\u{0430}\u{0445} macOS")
+            }
+        }
     }
 
     // MARK: - Icons
@@ -1821,12 +1835,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         try? open.run()
     }
 
+    // MARK: - Notifications
+
+    private func showInlineStatusMessage(_ text: String) {
+        let compact = text.replacingOccurrences(of: "\n", with: " · ")
+        let short = String(compact.prefix(72))
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.statusMenuItem.title = "\u{2139} " + short
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+                self?.updateStatus()
+            }
+        }
+    }
+
     private func showNotification(title: String, text: String) {
-        let notification = NSUserNotification()
-        notification.title = title
-        notification.informativeText = text
-        notification.contentImage = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png")
-        NSUserNotificationCenter.default.deliver(notification)
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { [weak self] settings in
+            guard let self = self else { return }
+            if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = text
+                content.sound = UNNotificationSound.default
+
+                let request = UNNotificationRequest(
+                    identifier: UUID().uuidString,
+                    content: content,
+                    trigger: nil
+                )
+                center.add(request) { error in
+                    if error != nil {
+                        self.showInlineStatusMessage(text)
+                    }
+                }
+            } else {
+                self.showInlineStatusMessage(text)
+            }
+        }
+    }
+
+    // Показываем уведомления даже когда приложение активно в статусбаре.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.alert, .sound])
     }
 }
 
@@ -1884,6 +1937,7 @@ SBPLIST
             print_info "Компиляция Swift (это может занять несколько секунд)..."
             if swiftc -O -o "$binary_path" \
                 -framework Cocoa \
+                -framework UserNotifications \
                 "$statusbar_dir/DostupVPN-StatusBar.swift" 2>/dev/null; then
                 xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
                 installed=true
