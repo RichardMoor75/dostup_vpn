@@ -1,9 +1,8 @@
 import Cocoa
-import UserNotifications
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
@@ -32,21 +31,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         loadIcons()
         setupStatusItem()
         setupMenu()
-        setupNotifications()
         startTimer()
         updateStatus()
-    }
-
-    // MARK: - Notifications Setup
-
-    private func setupNotifications() {
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
-            if !granted {
-                self?.showInlineStatusMessage("\u{0423}\u{0432}\u{0435}\u{0434}\u{043E}\u{043C}\u{043B}\u{0435}\u{043D}\u{0438}\u{044F} \u{043E}\u{0442}\u{043A}\u{043B}\u{044E}\u{0447}\u{0435}\u{043D}\u{044B} \u{0432} \u{043D}\u{0430}\u{0441}\u{0442}\u{0440}\u{043E}\u{0439}\u{043A}\u{0430}\u{0445} macOS")
-            }
-        }
     }
 
     // MARK: - Icons
@@ -448,49 +434,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     // MARK: - Notifications
 
-    private func showInlineStatusMessage(_ text: String) {
-        let compact = text.replacingOccurrences(of: "\n", with: " · ")
-        let short = String(compact.prefix(72))
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.statusMenuItem.title = "\u{2139} " + short
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
-                self?.updateStatus()
-            }
-        }
-    }
-
     private func showNotification(title: String, text: String) {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { [weak self] settings in
-            guard let self = self else { return }
-            if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
-                let content = UNMutableNotificationContent()
-                content.title = title
-                content.body = text
-                content.sound = UNNotificationSound.default
-
-                let request = UNNotificationRequest(
-                    identifier: UUID().uuidString,
-                    content: content,
-                    trigger: nil
-                )
-                center.add(request) { error in
-                    if error != nil {
-                        self.showInlineStatusMessage(text)
-                    }
-                }
-            } else {
-                self.showInlineStatusMessage(text)
-            }
-        }
-    }
-
-    // Показываем уведомления даже когда приложение активно в статусбаре.
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                willPresent notification: UNNotification,
-                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.alert, .sound])
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = text
+        notification.contentImage = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png")
+        NSUserNotificationCenter.default.deliver(notification)
     }
 }
 
