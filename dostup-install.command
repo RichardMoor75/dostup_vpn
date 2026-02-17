@@ -1894,33 +1894,43 @@ SBPLIST
 
     local binary_path="$app_path/Contents/MacOS/DostupVPN-StatusBar"
     local installed=false
+    local swiftc_bin=""
+    local dev_dir=""
 
-    # --- Способ 1: скачать предкомпилированный бинарник ---
-    print_info "Скачивание menu bar приложения..."
-    if download_with_retry "$STATUSBAR_BIN_URL" "$binary_path"; then
-        chmod +x "$binary_path"
-        xattr -d com.apple.quarantine "$binary_path" 2>/dev/null || true
-        xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
-        installed=true
-        print_success "Menu bar приложение скачано"
-    else
-        print_info "Не удалось скачать, попытка компиляции..."
+    # Приоритет: локальная компиляция, если swiftc действительно доступен.
+    # Проверяем реальный бинарник через xcode-select, чтобы не триггерить shim-диалог CLT.
+    dev_dir=$(xcode-select -p 2>/dev/null || true)
+    if [[ -n "$dev_dir" ]] && [[ -x "${dev_dir}/usr/bin/swiftc" ]]; then
+        swiftc_bin="${dev_dir}/usr/bin/swiftc"
+    elif pkgutil --pkg-info=com.apple.pkg.CLTools_Executables &>/dev/null && [[ -x "/usr/bin/swiftc" ]]; then
+        swiftc_bin="/usr/bin/swiftc"
+    fi
 
-        # --- Способ 2 (fallback): компиляция через swiftc ---
-        # pkgutil не является шимом и не вызывает диалог установки CLT
-        if pkgutil --pkg-info=com.apple.pkg.CLTools_Executables &>/dev/null; then
-            print_info "Компиляция Swift (это может занять несколько секунд)..."
-            if swiftc -O -o "$binary_path" \
-                -framework Cocoa \
-                "$statusbar_dir/DostupVPN-StatusBar.swift" 2>/dev/null; then
-                xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
-                installed=true
-                print_success "Menu bar приложение скомпилировано"
-            else
-                print_warning "Не удалось скомпилировать menu bar приложение"
-            fi
+    if [[ -n "$swiftc_bin" ]]; then
+        print_info "Найден swiftc, компиляция menu bar приложения..."
+        if "$swiftc_bin" -O -o "$binary_path" \
+            -framework Cocoa \
+            "$statusbar_dir/DostupVPN-StatusBar.swift" 2>/dev/null; then
+            xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
+            installed=true
+            print_success "Menu bar приложение скомпилировано"
         else
-            print_info "Xcode CLT не найден, пропуск компиляции"
+            print_warning "Не удалось скомпилировать menu bar приложение, попытка скачивания..."
+        fi
+    else
+        print_info "swiftc не найден, попытка скачать готовый бинарник..."
+    fi
+
+    if ! $installed; then
+        print_info "Скачивание menu bar приложения..."
+        if download_with_retry "$STATUSBAR_BIN_URL" "$binary_path"; then
+            chmod +x "$binary_path"
+            xattr -d com.apple.quarantine "$binary_path" 2>/dev/null || true
+            xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
+            installed=true
+            print_success "Menu bar приложение скачано"
+        else
+            print_warning "Не удалось скачать готовый бинарник menu bar приложения"
         fi
     fi
 
