@@ -1896,6 +1896,7 @@ SBPLIST
     local installed=false
     local swiftc_bin=""
     local dev_dir=""
+    local statusbar_build_log="$LOGS_DIR/statusbar-build.log"
 
     # Приоритет: локальная компиляция, если swiftc действительно доступен.
     # Проверяем реальный бинарник через xcode-select, чтобы не триггерить shim-диалог CLT.
@@ -1908,14 +1909,32 @@ SBPLIST
 
     if [[ -n "$swiftc_bin" ]]; then
         print_info "Найден swiftc, компиляция menu bar приложения..."
-        if "$swiftc_bin" -O -o "$binary_path" \
-            -framework Cocoa \
-            "$statusbar_dir/DostupVPN-StatusBar.swift" 2>/dev/null; then
+        mkdir -p "$LOGS_DIR"
+        : > "$statusbar_build_log"
+        local compile_ok=false
+        if [[ -x "/usr/bin/xcrun" ]]; then
+            if /usr/bin/xcrun swiftc -O -o "$binary_path" \
+                -framework Cocoa \
+                "$statusbar_dir/DostupVPN-StatusBar.swift" 2>"$statusbar_build_log"; then
+                compile_ok=true
+            fi
+        else
+            if "$swiftc_bin" -O -o "$binary_path" \
+                -framework Cocoa \
+                "$statusbar_dir/DostupVPN-StatusBar.swift" 2>"$statusbar_build_log"; then
+                compile_ok=true
+            fi
+        fi
+        if $compile_ok; then
             xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
             installed=true
             print_success "Menu bar приложение скомпилировано"
         else
             print_warning "Не удалось скомпилировать menu bar приложение, попытка скачивания..."
+            if [[ -s "$statusbar_build_log" ]]; then
+                print_info "Лог компиляции: $statusbar_build_log"
+                print_info "Ошибка: $(tail -n 2 "$statusbar_build_log" | tr '\n' ' ' | sed 's/[[:space:]]\\+/ /g')"
+            fi
         fi
     else
         print_info "swiftc не найден, попытка скачать готовый бинарник..."
@@ -2271,7 +2290,7 @@ print_success "Скрипт создан"
 # Ярлыки на рабочем столе
 create_desktop_shortcuts
 
-# Menu bar приложение (скачивание бинарника, fallback на компиляцию)
+# Menu bar приложение (компиляция, fallback на скачивание бинарника)
 create_statusbar_app
 
 # Passwordless управление VPN (sudoers)
