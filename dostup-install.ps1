@@ -386,6 +386,19 @@ if ($serviceExists) {
     if (Get-Process -Name 'DostupVPN-Service' -ErrorAction SilentlyContinue) {
         Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM DostupVPN-Service.exe' -Verb RunAs -Wait -WindowStyle Hidden
     }
+
+    # Delete service registration so SCM releases handles on exe
+    sc.exe delete DostupVPN 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Start-Process -FilePath 'cmd.exe' -ArgumentList '/c sc.exe delete DostupVPN' -Verb RunAs -Wait -WindowStyle Hidden
+    }
+
+    # Wait for DostupVPN-Service.exe to fully exit
+    $svcExitTimeout = 5
+    while ((Get-Process -Name 'DostupVPN-Service' -ErrorAction SilentlyContinue) -and $svcExitTimeout -gt 0) {
+        Start-Sleep -Seconds 1
+        $svcExitTimeout--
+    }
 }
 
 $hadMihomo = [bool](Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue)
