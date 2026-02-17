@@ -386,19 +386,6 @@ if ($serviceExists) {
     if (Get-Process -Name 'DostupVPN-Service' -ErrorAction SilentlyContinue) {
         Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM DostupVPN-Service.exe' -Verb RunAs -Wait -WindowStyle Hidden
     }
-
-    # Delete service registration so SCM releases handles on exe
-    sc.exe delete DostupVPN 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Start-Process -FilePath 'cmd.exe' -ArgumentList '/c sc.exe delete DostupVPN' -Verb RunAs -Wait -WindowStyle Hidden
-    }
-
-    # Wait for DostupVPN-Service.exe to fully exit
-    $svcExitTimeout = 5
-    while ((Get-Process -Name 'DostupVPN-Service' -ErrorAction SilentlyContinue) -and $svcExitTimeout -gt 0) {
-        Start-Sleep -Seconds 1
-        $svcExitTimeout--
-    }
 }
 
 $hadMihomo = [bool](Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue)
@@ -469,11 +456,14 @@ if (($altDostupDir -ne $DOSTUP_DIR) -and (Test-Path $altDostupDir)) {
     }
 }
 
+# Give OS time to release file handles after killing processes
+Start-Sleep -Seconds 3
+
 # Remove current location
 if (Test-Path $DOSTUP_DIR) {
     Write-Step 'Removing old installation...'
     # Retry removal in case files are still locked (self-update race)
-    $maxRetries = 12
+    $maxRetries = 20
     for ($attempt = 1; $attempt -le $maxRetries -and (Test-Path $DOSTUP_DIR); $attempt++) {
         Remove-Item -Recurse -Force $DOSTUP_DIR -ErrorAction SilentlyContinue
         if (Test-Path $DOSTUP_DIR) {
