@@ -25,6 +25,27 @@ function Write-OK($text) { Write-Host "[OK] $text" -ForegroundColor Green }
 function Write-Fail($text) { Write-Host "[FAIL] $text" -ForegroundColor Red }
 function Write-Info($text) { Write-Host "[i] $text" -ForegroundColor Blue }
 
+function Start-TrayApplication {
+    $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
+    $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
+
+    if (Test-Path $trayScript) {
+        try {
+            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden -ErrorAction Stop
+            return $true
+        } catch { }
+    }
+
+    if (Test-Path $trayVbs) {
+        try {
+            Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden -ErrorAction Stop
+            return $true
+        } catch { }
+    }
+
+    return $false
+}
+
 function Test-CurlAvailable {
     return ($null -ne (Get-Command curl.exe -ErrorAction SilentlyContinue))
 }
@@ -109,17 +130,26 @@ function Test-LocalPortListening($port) {
 
 function Wait-MihomoStart($timeoutSec = 5) {
     $proxyPort = Get-MixedPort
+    $stableProcSeconds = 0
     for ($i = 0; $i -lt $timeoutSec; $i++) {
-        if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+        $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
+        $portListening = Test-LocalPortListening $proxyPort
+        if ($proc -and $portListening) {
             return $true
         }
-        if (Test-LocalPortListening $proxyPort) {
-            return $true
+        if ($proc) {
+            $stableProcSeconds++
+            if ($stableProcSeconds -ge 3) {
+                return $true
+            }
+        } else {
+            $stableProcSeconds = 0
         }
         Start-Sleep -Seconds 1
     }
-    if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
-        return $true
+    $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
+    if (-not $proc) {
+        return $false
     }
     return (Test-LocalPortListening $proxyPort)
 }
@@ -911,17 +941,26 @@ function Test-LocalPortListening($port) {
 
 function Wait-MihomoStart($timeoutSec = 5) {
     $proxyPort = Get-ProxyPort
+    $stableProcSeconds = 0
     for ($i = 0; $i -lt $timeoutSec; $i++) {
-        if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
+        $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
+        $portListening = Test-LocalPortListening $proxyPort
+        if ($proc -and $portListening) {
             return $true
         }
-        if (Test-LocalPortListening $proxyPort) {
-            return $true
+        if ($proc) {
+            $stableProcSeconds++
+            if ($stableProcSeconds -ge 3) {
+                return $true
+            }
+        } else {
+            $stableProcSeconds = 0
         }
         Start-Sleep -Seconds 1
     }
-    if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
-        return $true
+    $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
+    if (-not $proc) {
+        return $false
     }
     return (Test-LocalPortListening $proxyPort)
 }
@@ -1428,11 +1467,20 @@ if ($proc) {
     # Mihomo не запущен — запускаем
     Start-Mihomo | Out-Null
     # Запускаем tray если установлен но не запущен
+    $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
     $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
-    if (Test-Path $trayVbs) {
-        $trayRunning = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
-        if (-not $trayRunning) {
+    $trayRunning = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
+    if (-not $trayRunning) {
+        if (Test-Path $trayScript) {
+            try {
+                Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden -ErrorAction Stop
+            } catch {
+                if (Test-Path $trayVbs) {
+                    Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden
+                }
+            }
+        } elseif (Test-Path $trayVbs) {
             Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden
         }
     }
@@ -1948,14 +1996,14 @@ Write-OK 'Desktop shortcut created'
 Write-Step 'Creating tray launcher...'
 # VBScript launcher to start tray without visible console window
 $vbsContent = "CreateObject(""Wscript.Shell"").Run ""powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File """"$DOSTUP_DIR\DostupVPN-Tray.ps1"""""", 0, False"
-[System.IO.File]::WriteAllText("$DOSTUP_DIR\LaunchTray.vbs", $vbsContent, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText("$DOSTUP_DIR\LaunchTray.vbs", $vbsContent, [System.Text.Encoding]::Unicode)
 Write-OK 'Tray launcher created'
 
 Write-Step 'Creating startup shortcut for tray...'
 $startupFolder = [Environment]::GetFolderPath('Startup')
 $trayLnk = $WshShell.CreateShortcut("$startupFolder\DostupVPN-Tray.lnk")
-$trayLnk.TargetPath = "wscript.exe"
-$trayLnk.Arguments = "`"$DOSTUP_DIR\LaunchTray.vbs`""
+$trayLnk.TargetPath = "powershell.exe"
+$trayLnk.Arguments = "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$DOSTUP_DIR\DostupVPN-Tray.ps1`""
 $trayLnk.WorkingDirectory = $DOSTUP_DIR
 if (Test-Path $iconPath) {
     $trayLnk.IconLocation = "$iconPath,0"
@@ -2132,9 +2180,7 @@ if (Wait-MihomoStart 5) {
     }
 
     # Launch tray application
-    $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
-    if (Test-Path $trayVbs) {
-        Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden
+    if (Start-TrayApplication) {
         Write-OK 'Tray application started'
     }
 
