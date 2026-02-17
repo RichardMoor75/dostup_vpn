@@ -6,7 +6,11 @@ $ErrorActionPreference = 'Stop'
 # Enable TLS 1.2 for older Windows versions (Win 7/8)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$DOSTUP_DIR = "$env:USERPROFILE\dostup"
+if ($env:USERPROFILE -match '[^\x00-\x7F]') {
+    $DOSTUP_DIR = "$env:ProgramData\dostup"
+} else {
+    $DOSTUP_DIR = "$env:USERPROFILE\dostup"
+}
 $LOGS_DIR = "$DOSTUP_DIR\logs"
 $CONFIG_FILE = "$DOSTUP_DIR\config.yaml"
 $SETTINGS_FILE = "$DOSTUP_DIR\settings.json"
@@ -424,10 +428,18 @@ if ($trayProcs) {
     Write-OK 'Tray application stopped'
 }
 
-# Stop old control scripts that can lock files in $DOSTUP_DIR
+# Determine alternative install location for cleanup
+$altDostupDir = if ($DOSTUP_DIR -eq "$env:USERPROFILE\dostup") {
+    "$env:ProgramData\dostup"
+} else {
+    "$env:USERPROFILE\dostup"
+}
+
+# Stop old control scripts from BOTH locations
 $escapedDostupDir = [regex]::Escape("$DOSTUP_DIR\")
+$escapedAltDir = [regex]::Escape("$altDostupDir\")
 $controlProcs = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match $escapedDostupDir }
+    Where-Object { $_.ProcessId -ne $PID -and ($_.CommandLine -match $escapedDostupDir -or $_.CommandLine -match $escapedAltDir) }
 if ($controlProcs) {
     Write-Step 'Stopping old control scripts...'
     $controlProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -435,7 +447,16 @@ if ($controlProcs) {
     Write-OK 'Old control scripts stopped'
 }
 
-# Remove old installation
+# Remove old installation from alternative location (non-fatal)
+if (($altDostupDir -ne $DOSTUP_DIR) -and (Test-Path $altDostupDir)) {
+    Write-Step "Removing old installation from $altDostupDir..."
+    Remove-Item -Recurse -Force $altDostupDir -ErrorAction SilentlyContinue
+    if (-not (Test-Path $altDostupDir)) {
+        Write-OK 'Old installation removed'
+    }
+}
+
+# Remove current location
 if (Test-Path $DOSTUP_DIR) {
     Write-Step 'Removing old installation...'
     # Retry removal in case files are still locked (self-update race)
@@ -471,6 +492,19 @@ Write-Step 'Creating folder...'
 New-Item -ItemType Directory -Force -Path $DOSTUP_DIR | Out-Null
 New-Item -ItemType Directory -Force -Path $LOGS_DIR | Out-Null
 Write-OK 'Folder created'
+
+# Grant current user full control when installing to ProgramData
+if ($DOSTUP_DIR -like "$env:ProgramData*") {
+    try {
+        $acl = Get-Acl $DOSTUP_DIR
+        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
+        )
+        $acl.AddAccessRule($rule)
+        Set-Acl $DOSTUP_DIR $acl
+    } catch {}
+}
 
 Write-Step 'Detecting architecture...'
 $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
@@ -763,7 +797,11 @@ $controlPs1 = @'
 # Enable TLS 1.2 for older Windows versions (Win 7/8)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$DOSTUP_DIR = "$env:USERPROFILE\dostup"
+if ($env:USERPROFILE -match '[^\x00-\x7F]') {
+    $DOSTUP_DIR = "$env:ProgramData\dostup"
+} else {
+    $DOSTUP_DIR = "$env:USERPROFILE\dostup"
+}
 $SETTINGS_FILE = "$DOSTUP_DIR\settings.json"
 $MIHOMO_BIN = "$DOSTUP_DIR\mihomo.exe"
 $CONFIG_FILE = "$DOSTUP_DIR\config.yaml"
@@ -1531,7 +1569,11 @@ if (-not $createdNew) {
     exit
 }
 
-$DOSTUP_DIR = "$env:USERPROFILE\dostup"
+if ($env:USERPROFILE -match '[^\x00-\x7F]') {
+    $DOSTUP_DIR = "$env:ProgramData\dostup"
+} else {
+    $DOSTUP_DIR = "$env:USERPROFILE\dostup"
+}
 $CONTROL_SCRIPT = "$DOSTUP_DIR\Dostup_VPN.ps1"
 $MIHOMO_BIN = "$DOSTUP_DIR\mihomo.exe"
 $CONFIG_FILE = "$DOSTUP_DIR\config.yaml"
