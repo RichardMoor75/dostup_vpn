@@ -117,6 +117,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ```
 ~/dostup/                    # macOS: /Users/username/dostup/
 %USERPROFILE%\dostup\        # Windows: C:\Users\username\dostup\
+                             # (или %ProgramData%\dostup\ если имя профиля содержит кириллицу)
 /opt/dostup/                 # Linux
 
 ├── mihomo                   # Ядро (mihomo.exe на Windows)
@@ -198,10 +199,12 @@ Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
 Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" |
     Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+# Определить папку установки
+$d = if (Test-Path "$env:ProgramData\dostup\mihomo.exe") { "$env:ProgramData\dostup" } else { "$env:USERPROFILE\dostup" }
 # Восстановить DNS (Win 10+)
-powershell -ExecutionPolicy Bypass -NoProfile -File "$env:USERPROFILE\dostup\dns-helper.ps1" restore 2>$null
+powershell -ExecutionPolicy Bypass -NoProfile -File "$d\dns-helper.ps1" restore 2>$null
 # Удалить файлы и ярлыки
-Remove-Item -Recurse -Force "$env:USERPROFILE\dostup"
+Remove-Item -Recurse -Force $d
 Remove-Item "$env:USERPROFILE\Desktop\Dostup_VPN.lnk" -ErrorAction SilentlyContinue
 Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\DostupVPN-Tray.lnk" -ErrorAction SilentlyContinue
 ```

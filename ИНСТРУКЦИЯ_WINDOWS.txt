@@ -140,6 +140,7 @@ https://metacubex.github.io/metacubexd/
 
 1. Нажмите Win + R
 2. Введите: %USERPROFILE%\dostup\settings.json
+   (если папка не найдена, попробуйте: %ProgramData%\dostup\settings.json)
 3. Откройте файл Блокнотом
 4. Измените значение "subscription_url"
 5. Сохраните файл
@@ -165,7 +166,7 @@ Windows Defender блокирует файл:
    → Проверьте что URL подписки правильный
    → Запустите Dostup_VPN → выберите "Перезапустить"
    → Попробуйте "Проверить доступ" чтобы увидеть статус
-   → Проверьте логи: %USERPROFILE%\dostup\logs\
+   → Проверьте логи: %USERPROFILE%\dostup\logs\ (или %ProgramData%\dostup\logs\)
 
 "Выполнение скриптов отключено":
    → Откройте PowerShell от администратора
@@ -212,8 +213,9 @@ PPPoE подключения (Ростелеком, Дом.ру и др.) тре
    sc.exe stop DostupVPN 2>$null; sc.exe delete DostupVPN 2>$null
    Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
    Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-   powershell -ExecutionPolicy Bypass -NoProfile -File "$env:USERPROFILE\dostup\dns-helper.ps1" restore 2>$null
-   Remove-Item -Recurse -Force "$env:USERPROFILE\dostup"
+   $d = if (Test-Path "$env:ProgramData\dostup\mihomo.exe") { "$env:ProgramData\dostup" } else { "$env:USERPROFILE\dostup" }
+   powershell -ExecutionPolicy Bypass -NoProfile -File "$d\dns-helper.ps1" restore 2>$null
+   Remove-Item -Recurse -Force $d
    Remove-Item "$env:USERPROFILE\Desktop\Dostup_VPN.lnk" -ErrorAction SilentlyContinue
    Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\DostupVPN-Tray.lnk" -ErrorAction SilentlyContinue
 
