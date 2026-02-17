@@ -143,23 +143,19 @@ function Invoke-DownloadWithRetry($url, $output, $maxRetries = 3) {
         Remove-Item $output -Force -ErrorAction SilentlyContinue
         if ($useCurl) {
             try {
-                & curl.exe -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                & curl.exe -fL --connect-timeout 10 --max-time 120 -# -o $output $url
             } catch { }
             if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                 return $true
             }
         }
         try {
-            $previousProgressPreference = $ProgressPreference
-            $ProgressPreference = 'SilentlyContinue'
             Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 120
             if ((Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                 return $true
             }
         } catch {
             # fallback path failed, retry below
-        } finally {
-            $ProgressPreference = $previousProgressPreference
         }
         $retry++
         if ($retry -lt $maxRetries) {
@@ -596,23 +592,19 @@ function Invoke-DownloadWithRetry($url, $output) {
         Remove-Item $output -Force -ErrorAction SilentlyContinue
         if ($useCurl) {
             try {
-                & curl.exe -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                & curl.exe -fL --connect-timeout 10 --max-time 120 -# -o $output $url
             } catch { }
             if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                 return $true
             }
         }
         try {
-            $previousProgressPreference = $ProgressPreference
-            $ProgressPreference = 'SilentlyContinue'
             Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 120
             if ((Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                 return $true
             }
         } catch {
             # fallback path failed, retry below
-        } finally {
-            $ProgressPreference = $previousProgressPreference
         }
         $retry++
         if ($retry -lt 3) { Write-Info "Retry ($retry/3)..."; Start-Sleep -Seconds 2 }
@@ -929,6 +921,12 @@ function Save-Settings($s) {
     [System.IO.File]::WriteAllText($SETTINGS_FILE, $json, (New-Object System.Text.UTF8Encoding($false)))
 }
 
+function Start-InstallerUpdateProcess($installerPath) {
+    $escaped = $installerPath.Replace("'", "''")
+    $cmd = "Start-Sleep -Seconds 2; & '$escaped'; Remove-Item -LiteralPath '$escaped' -Force -ErrorAction SilentlyContinue"
+    Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd) -WindowStyle Normal | Out-Null
+}
+
 function Test-InstallerUpdate {
     try {
         $s = Get-Content $SETTINGS_FILE -Raw | ConvertFrom-Json
@@ -954,7 +952,7 @@ function Test-InstallerUpdate {
             $choice = Read-Host '  Обновить сейчас? (y/N)'
             if ($choice -eq 'y' -or $choice -eq 'Y') {
                 Write-Step 'Обновление...'
-                & powershell -ExecutionPolicy Bypass -File $tmpFile
+                Start-InstallerUpdateProcess $tmpFile
                 exit
             }
         }
@@ -1088,17 +1086,17 @@ function Start-Mihomo {
 if ($args.Count -gt 0) {
     switch ($args[0]) {
         'start' {
-            Start-Mihomo
+            Start-Mihomo | Out-Null
             exit
         }
         'stop' {
-            Stop-Mihomo
+            Stop-Mihomo | Out-Null
             exit
         }
         'restart' {
-            Stop-Mihomo
+            Stop-Mihomo | Out-Null
             Write-Host ''
-            Start-Mihomo
+            Start-Mihomo | Out-Null
             Write-Host ''
             Write-Host 'Окно закроется через 5 секунд...'
             Start-Sleep -Seconds 5
@@ -1182,15 +1180,15 @@ if ($proc) {
 
     switch ($choice) {
         '1' {
-            Stop-Mihomo
+            Stop-Mihomo | Out-Null
             Write-Host ''
             Write-Host 'Окно закроется через 3 секунды...'
             Start-Sleep -Seconds 3
         }
         '2' {
-            Stop-Mihomo
+            Stop-Mihomo | Out-Null
             Write-Host ''
-            Start-Mihomo
+            Start-Mihomo | Out-Null
             Write-Host ''
             Write-Host 'Окно закроется через 5 секунд...'
             Start-Sleep -Seconds 5
@@ -1217,7 +1215,7 @@ if ($proc) {
     }
 } else {
     # Mihomo не запущен — запускаем
-    Start-Mihomo
+    Start-Mihomo | Out-Null
     # Запускаем tray если установлен но не запущен
     $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
     if (Test-Path $trayVbs) {
