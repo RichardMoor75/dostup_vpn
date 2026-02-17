@@ -1875,6 +1875,29 @@ if ([Environment]::OSVersion.Version.Major -ge 10) {
 $DOSTUP_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DNS_SAVE_FILE = "$DOSTUP_DIR\original_dns.json"
 
+function Repair-CyrillicAdapters {
+    try {
+        $adapters = Get-NetAdapter | Where-Object {
+            $_.Status -eq 'Up' -and $_.Name -match '[^\x00-\x7F]'
+        }
+        if (-not $adapters) { return }
+        foreach ($a in @($adapters)) {
+            if ($a.Name -match '^\u0411\u0435\u0441\u043F\u0440\u043E\u0432\u043E\u0434\u043D\u0430\u044F \u0441\u0435\u0442\u044C(\s+\d+)?$') {
+                $newName = 'WiFi' + $(if ($Matches[1]) { $Matches[1] } else { '' })
+            } elseif ($a.Name -match '^\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \u043F\u043E \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u043E\u0439 \u0441\u0435\u0442\u0438(\s+\d+)?$') {
+                $newName = 'Ethernet' + $(if ($Matches[1]) { $Matches[1] } else { '' })
+            } else {
+                $newName = "Net-$($a.InterfaceIndex)"
+            }
+            if (Get-NetAdapter -Name $newName -ErrorAction SilentlyContinue) {
+                $newName = "$newName-$($a.InterfaceIndex)"
+            }
+            Rename-NetAdapter -Name $a.Name -NewName $newName
+            Write-Host "[DNS] Adapter renamed: $($a.Name) -> $newName" -ForegroundColor Green
+        }
+    } catch {}
+}
+
 function Get-ActiveAdapter {
     # Find active non-virtual, non-TUN adapter
     $adapters = Get-NetAdapter | Where-Object {
@@ -1893,6 +1916,9 @@ function Get-ActiveAdapter {
 }
 
 function Set-DostupDns {
+    # Fix Cyrillic adapter names before DNS setup
+    Repair-CyrillicAdapters
+
     $adapter = Get-ActiveAdapter
     if (-not $adapter) {
         Write-Host '[DNS] No active network adapter found' -ForegroundColor Yellow
@@ -2060,11 +2086,7 @@ public class DostupVPNService : ServiceBase
             if (!_stopping) { this.Stop(); }
         };
 
-        _mihomo.Start();
-        _mihomo.BeginOutputReadLine();
-        _mihomo.BeginErrorReadLine();
-
-        // Set DNS to 8.8.8.8/9.9.9.9 (runs as SYSTEM — no UAC)
+        // Rename Cyrillic adapters + set DNS BEFORE mihomo starts (runs as SYSTEM — no UAC)
         try {
             string dnsHelper = Path.Combine(dir, "dns-helper.ps1");
             if (File.Exists(dnsHelper)) {
@@ -2074,9 +2096,13 @@ public class DostupVPNService : ServiceBase
                 dns.StartInfo.UseShellExecute = false;
                 dns.StartInfo.CreateNoWindow = true;
                 dns.Start();
-                dns.WaitForExit(10000);
+                dns.WaitForExit(15000);
             }
         } catch {}
+
+        _mihomo.Start();
+        _mihomo.BeginOutputReadLine();
+        _mihomo.BeginErrorReadLine();
     }
 
     protected override void OnStop()
@@ -2161,6 +2187,32 @@ try {
 } catch {
     Write-Info 'Firewall: manual configuration may be needed'
 }
+
+# Fix Cyrillic adapter names that break TUN routing (Win 10+)
+function Repair-CyrillicAdapters {
+    if ([Environment]::OSVersion.Version.Major -lt 10) { return }
+    try {
+        $adapters = Get-NetAdapter | Where-Object {
+            $_.Status -eq 'Up' -and $_.Name -match '[^\x00-\x7F]'
+        }
+        if (-not $adapters) { return }
+        foreach ($a in @($adapters)) {
+            if ($a.Name -match '^\u0411\u0435\u0441\u043F\u0440\u043E\u0432\u043E\u0434\u043D\u0430\u044F \u0441\u0435\u0442\u044C(\s+\d+)?$') {
+                $newName = 'WiFi' + $(if ($Matches[1]) { $Matches[1] } else { '' })
+            } elseif ($a.Name -match '^\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435 \u043F\u043E \u043B\u043E\u043A\u0430\u043B\u044C\u043D\u043E\u0439 \u0441\u0435\u0442\u0438(\s+\d+)?$') {
+                $newName = 'Ethernet' + $(if ($Matches[1]) { $Matches[1] } else { '' })
+            } else {
+                $newName = "Net-$($a.InterfaceIndex)"
+            }
+            if (Get-NetAdapter -Name $newName -ErrorAction SilentlyContinue) {
+                $newName = "$newName-$($a.InterfaceIndex)"
+            }
+            Rename-NetAdapter -Name $a.Name -NewName $newName
+            Write-OK "Adapter renamed: $($a.Name) -> $newName"
+        }
+    } catch {}
+}
+Repair-CyrillicAdapters
 
 Write-Step 'Starting Mihomo...'
 Write-Host ''
