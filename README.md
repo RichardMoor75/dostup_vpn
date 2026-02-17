@@ -36,6 +36,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Скачивает и валидирует конфиг (проверка YAML)
 - Скачивает geo-базы (geoip.dat, geosite.dat)
 - Создаёт иконку управления VPN (macOS — menu bar, Windows — системный трей, Linux — CLI `dostup`)
+- macOS menu bar: при наличии рабочего `swiftc` собирает локально (через `xcrun swiftc`), при ошибке/отсутствии — скачивает готовый бинарник
 - Создаёт приложение `Dostup_VPN` (macOS — ~/Applications, Windows — ярлык на рабочем столе) и systemd-сервис (Linux)
 - Настраивает брандмауэр (macOS Application Firewall / Windows Firewall)
 - Защита от DNS-утечки: автопереключение DNS на 8.8.8.8/9.9.9.9 при старте VPN (macOS, Windows 10+)
@@ -139,7 +140,8 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 │   ├── icon_on.png          # Зелёная иконка (VPN работает)
 │   └── icon_off.png         # Серая иконка (VPN остановлен)
 └── logs/
-    └── mihomo.log           # Логи
+    ├── mihomo.log           # Логи Mihomo
+    └── statusbar-build.log  # Лог сборки menu bar app (macOS, если была попытка компиляции)
 
 # Linux дополнительно:
 /etc/systemd/system/dostup.service   # systemd-сервис
