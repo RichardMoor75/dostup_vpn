@@ -25,6 +25,10 @@ function Write-OK($text) { Write-Host "[OK] $text" -ForegroundColor Green }
 function Write-Fail($text) { Write-Host "[FAIL] $text" -ForegroundColor Red }
 function Write-Info($text) { Write-Host "[i] $text" -ForegroundColor Blue }
 
+function Test-CurlAvailable {
+    return ($null -ne (Get-Command curl.exe -ErrorAction SilentlyContinue))
+}
+
 function Test-ValidUrl($url) {
     return $url -match '^https?://'
 }
@@ -95,43 +99,72 @@ function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
     if (-not (Get-Command Start-Job -ErrorAction SilentlyContinue)) {
         return $null
     }
+    $useCurl = Test-CurlAvailable
     try {
         return Start-Job -ScriptBlock {
-            param($url, $output, $maxRetries)
+            param($url, $output, $maxRetries, $useCurl)
             $ErrorActionPreference = 'Stop'
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             $retry = 0
             while ($retry -lt $maxRetries) {
+                Remove-Item $output -Force -ErrorAction SilentlyContinue
+                if ($useCurl) {
+                    try {
+                        & curl.exe -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+                    } catch { }
+                    if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                        return $true
+                    }
+                }
                 try {
-                    Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 30
+                    $previousProgressPreference = $ProgressPreference
+                    $ProgressPreference = 'SilentlyContinue'
+                    Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 120
                     if ((Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
                         return $true
                     }
-                } catch { }
+                } catch { } finally { $ProgressPreference = $previousProgressPreference }
                 $retry++
                 if ($retry -lt $maxRetries) {
                     Start-Sleep -Seconds 2
                 }
             }
             return $false
-        } -ArgumentList $url, $output, $maxRetries
+        } -ArgumentList $url, $output, $maxRetries, $useCurl
     } catch {
         return $null
     }
 }
 
 function Invoke-DownloadWithRetry($url, $output, $maxRetries = 3) {
+    $useCurl = Test-CurlAvailable
     $retry = 0
     while ($retry -lt $maxRetries) {
-        try {
-            Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 30
-            return $true
-        } catch {
-            $retry++
-            if ($retry -lt $maxRetries) {
-                Write-Info "Retry ($retry/$maxRetries)..."
-                Start-Sleep -Seconds 2
+        Remove-Item $output -Force -ErrorAction SilentlyContinue
+        if ($useCurl) {
+            try {
+                & curl.exe -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+            } catch { }
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                return $true
             }
+        }
+        try {
+            $previousProgressPreference = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 120
+            if ((Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                return $true
+            }
+        } catch {
+            # fallback path failed, retry below
+        } finally {
+            $ProgressPreference = $previousProgressPreference
+        }
+        $retry++
+        if ($retry -lt $maxRetries) {
+            Write-Info "Retry ($retry/$maxRetries)..."
+            Start-Sleep -Seconds 2
         }
     }
     return $false
@@ -552,16 +585,37 @@ function Write-OK($t) { Write-Host "[OK] $t" -ForegroundColor Green }
 function Write-Fail($t) { Write-Host "[FAIL] $t" -ForegroundColor Red }
 function Write-Info($t) { Write-Host "[i] $t" -ForegroundColor Blue }
 
+function Test-CurlAvailable {
+    return ($null -ne (Get-Command curl.exe -ErrorAction SilentlyContinue))
+}
+
 function Invoke-DownloadWithRetry($url, $output) {
+    $useCurl = Test-CurlAvailable
     $retry = 0
     while ($retry -lt 3) {
-        try {
-            Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 30
-            return $true
-        } catch {
-            $retry++
-            if ($retry -lt 3) { Write-Info "Retry ($retry/3)..."; Start-Sleep -Seconds 2 }
+        Remove-Item $output -Force -ErrorAction SilentlyContinue
+        if ($useCurl) {
+            try {
+                & curl.exe -fL --connect-timeout 10 --max-time 120 -sS -o $output $url
+            } catch { }
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                return $true
+            }
         }
+        try {
+            $previousProgressPreference = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing -TimeoutSec 120
+            if ((Test-Path $output) -and ((Get-Item $output).Length -gt 0)) {
+                return $true
+            }
+        } catch {
+            # fallback path failed, retry below
+        } finally {
+            $ProgressPreference = $previousProgressPreference
+        }
+        $retry++
+        if ($retry -lt 3) { Write-Info "Retry ($retry/3)..."; Start-Sleep -Seconds 2 }
     }
     return $false
 }
@@ -883,17 +937,7 @@ function Test-InstallerUpdate {
         $url = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1'
         # Скачиваем в файл чтобы хешировать сырые байты (без encoding-преобразований)
         $tmpFile = "$env:TEMP\dostup-installer-check.ps1"
-        $downloaded = $false
-        for ($retry = 0; $retry -lt 3; $retry++) {
-            try {
-                Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 15 -OutFile $tmpFile
-                $downloaded = $true
-                break
-            } catch {
-                if ($retry -lt 2) { Start-Sleep -Seconds 2 }
-            }
-        }
-        if (-not $downloaded -or -not (Test-Path $tmpFile)) { return }
+        if (-not (Invoke-DownloadWithRetry $url $tmpFile) -or -not (Test-Path $tmpFile)) { return }
 
         $sha = [System.Security.Cryptography.SHA256]::Create()
         $rawBytes = [System.IO.File]::ReadAllBytes($tmpFile)
