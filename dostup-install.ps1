@@ -1385,7 +1385,7 @@ function Start-Mihomo {
     } else {
         Start-Process cmd.exe -ArgumentList "/c powershell -ExecutionPolicy Bypass -NoProfile -File `"$DOSTUP_DIR\dns-helper.ps1`" set & `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
     }
-    if (Wait-MihomoStart 5) {
+    if (Wait-MihomoStart 10) {
         Enable-SystemProxy
         Write-Host ''
         Write-Host '============================================' -ForegroundColor Green
@@ -2299,7 +2299,7 @@ if ($serviceCreated) {
 } else {
     Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
 }
-if (Wait-MihomoStart 5) {
+if (Wait-MihomoStart 10) {
     # Enable system proxy for Windows < 10
     if ($osVersion.Major -lt 10) {
         $proxyPort = Get-MixedPort
@@ -2308,11 +2308,6 @@ if (Wait-MihomoStart 5) {
         Set-ItemProperty -Path $regPath -Name ProxyEnable -Value 1
         Set-ItemProperty -Path $regPath -Name ProxyServer -Value $proxyServer
         Write-OK "System proxy enabled: $proxyServer"
-    }
-
-    # Launch tray application
-    if (Start-TrayApplication) {
-        Write-OK 'Tray application started'
     }
 
     Write-Host ''
@@ -2332,6 +2327,11 @@ if (Wait-MihomoStart 5) {
 } else {
     Write-Host '[FAIL] Failed to start Mihomo' -ForegroundColor Red
     Write-Host "Check logs: $LOGS_DIR"
+}
+
+# Launch tray application regardless of start check result
+if (Start-TrayApplication) {
+    Write-OK 'Tray application started'
 }
 
 Write-Host ''
