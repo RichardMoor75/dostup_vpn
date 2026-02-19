@@ -2222,6 +2222,7 @@ public class DostupVPNService : ServiceBase
 Write-Step 'Configuring firewall and service...'
 try {
     $elevatedCommands = @(
+        "powershell -Command `"try{Add-MpPreference -ExclusionPath '$DOSTUP_DIR'}catch{}`"",
         "netsh advfirewall firewall delete rule name=all program=`"$MIHOMO_BIN`"",
         "netsh advfirewall firewall add rule name=`"Mihomo Proxy (Inbound)`" dir=in action=allow program=`"$MIHOMO_BIN`" enable=yes profile=any",
         "netsh advfirewall firewall add rule name=`"Mihomo Proxy (Outbound)`" dir=out action=allow program=`"$MIHOMO_BIN`" enable=yes profile=any"
