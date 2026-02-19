@@ -30,15 +30,15 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 ## Что делает установщик
 
-- Определяет архитектуру системы (Intel/Apple Silicon, amd64/arm64/386)
-- Скачивает последнюю версию ядра Mihomo с GitHub
+- Определяет архитектуру системы (Intel/Apple Silicon, amd64/arm64/386) и возможности CPU (AVX2)
+- Скачивает подходящую версию ядра Mihomo с GitHub (compatible-билд для старых CPU без AVX2)
 - Запрашивает URL подписки (конфига) через GUI-диалог (на Linux — терминал)
 - Скачивает и валидирует конфиг (проверка YAML)
 - Скачивает geo-базы (geoip.dat, geosite.dat)
 - Создаёт иконку управления VPN (macOS — menu bar, Windows — системный трей, Linux — CLI `dostup`)
 - macOS menu bar: при наличии рабочего `swiftc` собирает локально (через `xcrun swiftc`), при ошибке/отсутствии — скачивает готовый бинарник
 - Создаёт приложение `Dostup_VPN` (macOS — ~/Applications, Windows — ярлык на рабочем столе) и systemd-сервис (Linux)
-- Настраивает брандмауэр (macOS Application Firewall / Windows Firewall)
+- Настраивает брандмауэр и исключение Windows Defender (macOS Application Firewall / Windows Firewall)
 - Защита от DNS-утечки: автопереключение DNS на 8.8.8.8/9.9.9.9 при старте VPN (macOS, Windows 10+)
 - Запускает Mihomo
 
