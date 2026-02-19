@@ -29,6 +29,13 @@ function Write-OK($text) { Write-Host "[OK] $text" -ForegroundColor Green }
 function Write-Fail($text) { Write-Host "[FAIL] $text" -ForegroundColor Red }
 function Write-Info($text) { Write-Host "[i] $text" -ForegroundColor Blue }
 
+function Test-Avx2Support {
+    try {
+        Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int feature);' -Name CpuFeature -Namespace Win32 -ErrorAction Stop
+        return [Win32.CpuFeature]::IsProcessorFeaturePresent(40)
+    } catch { return $false }
+}
+
 function Start-TrayApplication {
     $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
     $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
@@ -527,11 +534,15 @@ try {
 }
 
 Write-Step 'Downloading mihomo...'
-# Use compatible build for older Windows (7/8/8.1)
+# Use compatible build for older Windows or CPUs without AVX2
 $osVersion = [Environment]::OSVersion.Version
-if ($osVersion.Major -lt 10 -and $arch -eq 'amd64') {
+if ($arch -eq 'amd64' -and ($osVersion.Major -lt 10 -or -not (Test-Avx2Support))) {
     $filename = "mihomo-windows-$arch-compatible-$version.zip"
-    Write-Info "Using compatible build for Windows $($osVersion.Major).$($osVersion.Minor)"
+    if ($osVersion.Major -lt 10) {
+        Write-Info "Using compatible build for Windows $($osVersion.Major).$($osVersion.Minor)"
+    } else {
+        Write-Info 'Using compatible build (CPU without AVX2)'
+    }
 } else {
     $filename = "mihomo-windows-$arch-$version.zip"
 }
@@ -817,6 +828,13 @@ function Write-Step($t) { Write-Host "> $t" -ForegroundColor Yellow }
 function Write-OK($t) { Write-Host "[OK] $t" -ForegroundColor Green }
 function Write-Fail($t) { Write-Host "[FAIL] $t" -ForegroundColor Red }
 function Write-Info($t) { Write-Host "[i] $t" -ForegroundColor Blue }
+
+function Test-Avx2Support {
+    try {
+        Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int feature);' -Name CpuFeature -Namespace Win32 -ErrorAction Stop
+        return [Win32.CpuFeature]::IsProcessorFeaturePresent(40)
+    } catch { return $false }
+}
 
 function Start-TrayApplication {
     $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
@@ -1293,9 +1311,9 @@ function Start-Mihomo {
             Write-Step "Обновление: $($settings.installed_version) → $latest"
             $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
             if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $arch = 'arm64' }
-            # Use compatible build for older Windows (7/8/8.1)
+            # Use compatible build for older Windows or CPUs without AVX2
             $osVer = [Environment]::OSVersion.Version
-            if ($osVer.Major -lt 10 -and $arch -eq 'amd64') {
+            if ($arch -eq 'amd64' -and ($osVer.Major -lt 10 -or -not (Test-Avx2Support))) {
                 $fn = "mihomo-windows-$arch-compatible-$latest.zip"
             } else {
                 $fn = "mihomo-windows-$arch-$latest.zip"
