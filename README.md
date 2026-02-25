@@ -81,6 +81,8 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 
 На Linux используй `sudo dostup start|stop|restart|status|check|update-providers|healthcheck|log`.
 
+На Linux при каждом обновлении конфига автоматически добавляется кастомный rule-provider `proxy-rules` (правила маршрутизации с сервера) и соответствующее правило `RULE-SET` перед `MATCH`.
+
 При каждом запуске автоматически проверяются обновления:
 - Скрипт управления (сравнение SHA256 с версией на GitHub)
 - Ядро Mihomo (при наличии новой версии)
