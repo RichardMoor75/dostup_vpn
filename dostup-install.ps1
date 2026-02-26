@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 if ($env:USERPROFILE -match '[^\x00-\x7F]') {
-    $DOSTUP_DIR = "$env:ProgramData\dostup"
+    $DOSTUP_DIR = 'C:\dostup'
 } else {
     $DOSTUP_DIR = "$env:USERPROFILE\dostup"
 }
@@ -435,18 +435,19 @@ if ($trayProcs) {
     Write-OK 'Tray application stopped'
 }
 
-# Determine alternative install location for cleanup
-$altDostupDir = if ($DOSTUP_DIR -eq "$env:USERPROFILE\dostup") {
-    "$env:ProgramData\dostup"
-} else {
-    "$env:USERPROFILE\dostup"
-}
+# Determine all old install locations for cleanup
+$oldLocations = @("$env:USERPROFILE\dostup", "$env:ProgramData\dostup", 'C:\dostup') | Where-Object { $_ -ne $DOSTUP_DIR }
 
-# Stop old control scripts from BOTH locations
+# Stop old control scripts from ALL known locations
 $escapedDostupDir = [regex]::Escape("$DOSTUP_DIR\")
-$escapedAltDir = [regex]::Escape("$altDostupDir\")
+$escapedOldDirs = $oldLocations | ForEach-Object { [regex]::Escape("$_\") }
 $controlProcs = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.ProcessId -ne $PID -and ($_.CommandLine -match $escapedDostupDir -or $_.CommandLine -match $escapedAltDir) }
+    Where-Object {
+        if ($_.ProcessId -eq $PID) { return $false }
+        if ($_.CommandLine -match $escapedDostupDir) { return $true }
+        foreach ($pat in $escapedOldDirs) { if ($_.CommandLine -match $pat) { return $true } }
+        return $false
+    }
 if ($controlProcs) {
     Write-Step 'Stopping old control scripts...'
     $controlProcs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -454,12 +455,14 @@ if ($controlProcs) {
     Write-OK 'Old control scripts stopped'
 }
 
-# Remove old installation from alternative location (non-fatal)
-if (($altDostupDir -ne $DOSTUP_DIR) -and (Test-Path $altDostupDir)) {
-    Write-Step "Removing old installation from $altDostupDir..."
-    Remove-Item -Recurse -Force $altDostupDir -ErrorAction SilentlyContinue
-    if (-not (Test-Path $altDostupDir)) {
-        Write-OK 'Old installation removed'
+# Remove old installations from all alternative locations (non-fatal)
+foreach ($altDir in $oldLocations) {
+    if (Test-Path $altDir) {
+        Write-Step "Removing old installation from $altDir..."
+        Remove-Item -Recurse -Force $altDir -ErrorAction SilentlyContinue
+        if (-not (Test-Path $altDir)) {
+            Write-OK "Old installation removed from $altDir"
+        }
     }
 }
 
@@ -503,8 +506,8 @@ New-Item -ItemType Directory -Force -Path $DOSTUP_DIR | Out-Null
 New-Item -ItemType Directory -Force -Path $LOGS_DIR | Out-Null
 Write-OK 'Folder created'
 
-# Grant current user full control when installing to ProgramData
-if ($DOSTUP_DIR -like "$env:ProgramData*") {
+# Grant current user full control when installing outside user profile
+if ($DOSTUP_DIR -notlike "$env:USERPROFILE*") {
     try {
         $acl = Get-Acl $DOSTUP_DIR
         $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -812,7 +815,7 @@ $controlPs1 = @'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 if ($env:USERPROFILE -match '[^\x00-\x7F]') {
-    $DOSTUP_DIR = "$env:ProgramData\dostup"
+    $DOSTUP_DIR = 'C:\dostup'
 } else {
     $DOSTUP_DIR = "$env:USERPROFILE\dostup"
 }
@@ -1401,12 +1404,63 @@ function Start-Mihomo {
         Write-Host '[OK] Mihomo успешно запущен!' -ForegroundColor Green
         Write-Host '============================================' -ForegroundColor Green
         Write-Host ''
+        Write-Host "Папка: $DOSTUP_DIR" -ForegroundColor Cyan
+        Write-Host "Логи:  $DOSTUP_DIR\logs" -ForegroundColor Cyan
+        Write-Host ''
         Write-Host 'Панель: https://metacubex.github.io/metacubexd/'
         Write-Host 'API: 127.0.0.1:9090'
+
+        # Проверка нод после запуска
+        Write-Host ''
+        Write-Step 'Проверка нод...'
+        Start-Sleep -Seconds 3
+        try {
+            $api = 'http://127.0.0.1:9090'
+            $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+            $totalAlive = 0
+            $totalNodes = 0
+            foreach ($pName in $proxyData.providers.PSObject.Properties.Name) {
+                if ($pName -eq 'default') { continue }
+                try {
+                    Invoke-WebRequest -Uri "$api/providers/proxies/$pName/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+                    $details = Invoke-WebRequest -Uri "$api/providers/proxies/$pName" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+                    foreach ($px in $details.proxies) {
+                        $totalNodes++
+                        $h = $px.history
+                        if ($h -and $h.Count -gt 0 -and $h[-1].delay -gt 0) { $totalAlive++ }
+                    }
+                } catch { }
+            }
+            if ($totalNodes -eq 0) {
+                Write-Fail 'Провайдеры не загрузились. Проверьте подписку.'
+            } elseif ($totalAlive -eq 0) {
+                Write-Host ''
+                Write-Host '============================================' -ForegroundColor Red
+                Write-Fail "Ни одна нода не работает ($totalAlive/$totalNodes)"
+                Write-Host '============================================' -ForegroundColor Red
+                Write-Host ''
+                Write-Host 'Возможные причины:' -ForegroundColor Yellow
+                Write-Host '  - Провайдер/подписка не работает' -ForegroundColor Yellow
+                Write-Host '  - ISP блокирует VPN-протоколы' -ForegroundColor Yellow
+                Write-Host '  - Ноды временно недоступны' -ForegroundColor Yellow
+                Write-Host ''
+                $stopChoice = Read-Host 'Остановить VPN чтобы вернуть интернет? (y/N)'
+                if ($stopChoice -eq 'y' -or $stopChoice -eq 'Y') {
+                    Stop-Mihomo | Out-Null
+                    return $false
+                }
+            } else {
+                Write-OK "Нод: $totalAlive/$totalNodes"
+            }
+        } catch {
+            Write-Info 'Не удалось проверить ноды (API недоступен)'
+        }
+
         return $true
     } else {
         Write-Fail 'Не удалось запустить'
-        Write-Host "Логи: $DOSTUP_DIR\logs"
+        Write-Host "Папка: $DOSTUP_DIR" -ForegroundColor Yellow
+        Write-Host "Логи:  $DOSTUP_DIR\logs" -ForegroundColor Yellow
         return $false
     }
 }
@@ -1490,6 +1544,8 @@ if ([Environment]::OSVersion.Version.Major -ge 10) {
 # Interactive mode (desktop shortcut)
 Write-Host ''
 Write-Host '=== Dostup VPN ===' -ForegroundColor Blue
+Write-Host "Папка: $DOSTUP_DIR" -ForegroundColor Cyan
+Write-Host "Логи:  $DOSTUP_DIR\logs" -ForegroundColor Cyan
 Write-Host ''
 
 $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
@@ -1613,7 +1669,7 @@ if (-not $createdNew) {
 }
 
 if ($env:USERPROFILE -match '[^\x00-\x7F]') {
-    $DOSTUP_DIR = "$env:ProgramData\dostup"
+    $DOSTUP_DIR = 'C:\dostup'
 } else {
     $DOSTUP_DIR = "$env:USERPROFILE\dostup"
 }
@@ -2326,6 +2382,9 @@ if (Wait-MihomoStart $startTimeout) {
     Write-Host '    Installation completed!' -ForegroundColor Green
     Write-Host '============================================' -ForegroundColor Green
     Write-Host ''
+    Write-Host "Папка: $DOSTUP_DIR" -ForegroundColor Cyan
+    Write-Host "Логи:  $LOGS_DIR" -ForegroundColor Cyan
+    Write-Host ''
     Write-Host 'Panel: https://metacubex.github.io/metacubexd/'
     Write-Host 'API: 127.0.0.1:9090'
     Write-Host ''
@@ -2335,9 +2394,49 @@ if (Wait-MihomoStart $startTimeout) {
     Write-Host 'System tray:'
     Write-Host '  - VPN icon in the notification area (auto-start with Windows)'
     Write-Host ''
+
+    # Post-install node health check
+    Write-Step 'Checking proxy nodes...'
+    Start-Sleep -Seconds 3
+    try {
+        $api = 'http://127.0.0.1:9090'
+        $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+        $totalAlive = 0
+        $totalNodes = 0
+        foreach ($pName in $proxyData.providers.PSObject.Properties.Name) {
+            if ($pName -eq 'default') { continue }
+            try {
+                Invoke-WebRequest -Uri "$api/providers/proxies/$pName/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+                $details = Invoke-WebRequest -Uri "$api/providers/proxies/$pName" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
+                foreach ($px in $details.proxies) {
+                    $totalNodes++
+                    $h = $px.history
+                    if ($h -and $h.Count -gt 0 -and $h[-1].delay -gt 0) { $totalAlive++ }
+                }
+            } catch { }
+        }
+        if ($totalNodes -eq 0) {
+            Write-Fail 'Proxy providers did not load. Check subscription URL.'
+        } elseif ($totalAlive -eq 0) {
+            Write-Host ''
+            Write-Host '============================================' -ForegroundColor Red
+            Write-Fail "No working nodes ($totalAlive/$totalNodes)"
+            Write-Host '============================================' -ForegroundColor Red
+            Write-Host ''
+            Write-Host 'Possible reasons:' -ForegroundColor Yellow
+            Write-Host '  - Subscription/provider is down' -ForegroundColor Yellow
+            Write-Host '  - ISP blocks VPN protocols' -ForegroundColor Yellow
+            Write-Host '  - Nodes temporarily unavailable' -ForegroundColor Yellow
+        } else {
+            Write-OK "Nodes: $totalAlive/$totalNodes working"
+        }
+    } catch {
+        Write-Info 'Could not check nodes (API not ready)'
+    }
 } else {
     Write-Host '[FAIL] Failed to start Mihomo' -ForegroundColor Red
-    Write-Host "Check logs: $LOGS_DIR"
+    Write-Host "Папка: $DOSTUP_DIR" -ForegroundColor Yellow
+    Write-Host "Логи:  $LOGS_DIR" -ForegroundColor Yellow
 }
 
 # Launch tray application regardless of start check result
@@ -2346,6 +2445,6 @@ if (Start-TrayApplication) {
 }
 
 Write-Host ''
-Write-Host 'Window will close in 5 seconds...'
-Start-Sleep -Seconds 5
+Write-Host 'Press Enter to close...'
+Read-Host
 exit 0
