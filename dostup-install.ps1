@@ -384,14 +384,22 @@ if ($serviceExists) {
     $serviceState = (sc.exe query DostupVPN 2>$null | Out-String)
     if ($serviceState -notmatch 'STATE\s*:\s*\d+\s+STOPPED') {
         # Fallback: request elevation for old service ACLs
-        Start-Process -FilePath 'cmd.exe' -ArgumentList '/c sc.exe stop DostupVPN' -Verb RunAs -Wait -WindowStyle Hidden
+        try {
+            Start-Process -FilePath 'cmd.exe' -ArgumentList '/c sc.exe stop DostupVPN' -Verb RunAs -Wait -WindowStyle Hidden
+        } catch {
+            Write-Info 'Elevation declined, trying without admin...'
+        }
         Start-Sleep -Seconds 2
     }
 
     # Fallback: service wrapper may still hold files in dostup folder
     Stop-Process -Name 'DostupVPN-Service' -Force -ErrorAction SilentlyContinue
     if (Get-Process -Name 'DostupVPN-Service' -ErrorAction SilentlyContinue) {
-        Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM DostupVPN-Service.exe' -Verb RunAs -Wait -WindowStyle Hidden
+        try {
+            Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM DostupVPN-Service.exe' -Verb RunAs -Wait -WindowStyle Hidden
+        } catch {
+            Write-Info 'Could not stop service wrapper (elevation declined)'
+        }
     }
 }
 
@@ -405,7 +413,11 @@ Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
 
 # Fallback: elevated taskkill (for older installations with elevated mihomo)
 if (Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue) {
-    Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    try {
+        Start-Process -FilePath 'taskkill' -ArgumentList '/F /IM mihomo.exe' -Verb RunAs -Wait -WindowStyle Hidden
+    } catch {
+        Write-Info 'Could not stop mihomo (elevation declined)'
+    }
 }
 
 # Wait with timeout
@@ -456,8 +468,9 @@ if ($controlProcs) {
 }
 
 # Remove old installations from all alternative locations (non-fatal)
+# Only remove if the folder contains our marker files (mihomo.exe or settings.json)
 foreach ($altDir in $oldLocations) {
-    if (Test-Path $altDir) {
+    if ((Test-Path $altDir) -and ((Test-Path "$altDir\mihomo.exe") -or (Test-Path "$altDir\settings.json"))) {
         Write-Step "Removing old installation from $altDir..."
         Remove-Item -Recurse -Force $altDir -ErrorAction SilentlyContinue
         if (-not (Test-Path $altDir)) {
@@ -469,8 +482,8 @@ foreach ($altDir in $oldLocations) {
 # Give OS time to release file handles after killing processes
 Start-Sleep -Seconds 3
 
-# Remove current location
-if (Test-Path $DOSTUP_DIR) {
+# Remove current location (only if it's ours)
+if ((Test-Path $DOSTUP_DIR) -and ((Test-Path "$DOSTUP_DIR\mihomo.exe") -or (Test-Path "$DOSTUP_DIR\settings.json") -or (Test-Path "$DOSTUP_DIR\Dostup_VPN.ps1"))) {
     Write-Step 'Removing old installation...'
     # Retry removal in case files are still locked (self-update race)
     $maxRetries = 20
@@ -502,21 +515,43 @@ try {
 }
 
 Write-Step 'Creating folder...'
-New-Item -ItemType Directory -Force -Path $DOSTUP_DIR | Out-Null
-New-Item -ItemType Directory -Force -Path $LOGS_DIR | Out-Null
-Write-OK 'Folder created'
+try {
+    New-Item -ItemType Directory -Force -Path $DOSTUP_DIR -ErrorAction Stop | Out-Null
+    New-Item -ItemType Directory -Force -Path $LOGS_DIR -ErrorAction Stop | Out-Null
+    Write-OK "Folder created: $DOSTUP_DIR"
+} catch {
+    Write-Fail "Cannot create folder: $DOSTUP_DIR"
+    Write-Host ''
+    Write-Host 'Try running PowerShell as Administrator' -ForegroundColor Yellow
+    Write-Host 'Right-click PowerShell -> Run as Administrator' -ForegroundColor Yellow
+    Read-Host 'Press Enter to close'
+    exit 1
+}
 
-# Grant current user full control when installing outside user profile
+# Restrict ACL when installing outside user profile (e.g. C:\dostup)
+# Only current user + SYSTEM get access; inherited permissions are removed
 if ($DOSTUP_DIR -notlike "$env:USERPROFILE*") {
     try {
-        $acl = Get-Acl $DOSTUP_DIR
+        $acl = New-Object System.Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)  # disable inheritance, remove inherited rules
         $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
             $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
         )
-        $acl.AddAccessRule($rule)
+        $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'NT AUTHORITY\SYSTEM', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
+        )
+        $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'BUILTIN\Administrators', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
+        )
+        $acl.AddAccessRule($userRule)
+        $acl.AddAccessRule($systemRule)
+        $acl.AddAccessRule($adminRule)
         Set-Acl $DOSTUP_DIR $acl
-    } catch {}
+        Write-OK 'Folder permissions set (restricted)'
+    } catch {
+        Write-Info 'Could not restrict folder permissions'
+    }
 }
 
 Write-Step 'Detecting architecture...'
@@ -2358,15 +2393,24 @@ Repair-CyrillicAdapters
 
 Write-Step 'Starting Mihomo...'
 Write-Host ''
+$mihomoStarted = $false
 if ($serviceCreated) {
     sc.exe start DostupVPN 2>$null | Out-Null
+    $mihomoStarted = $true
 } elseif ($osVersion.Major -lt 10) {
     Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -WindowStyle Hidden
+    $mihomoStarted = $true
 } else {
-    Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+    try {
+        Start-Process cmd.exe -ArgumentList "/c `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$LOGS_DIR\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
+        $mihomoStarted = $true
+    } catch {
+        Write-Fail 'Elevation declined. Mihomo needs admin rights to use TUN mode.'
+        Write-Host 'Please accept the UAC prompt when restarting from the desktop shortcut.' -ForegroundColor Yellow
+    }
 }
 $startTimeout = if ($env:USERPROFILE -match '[^\x00-\x7F]') { 15 } else { 5 }
-if (Wait-MihomoStart $startTimeout) {
+if ($mihomoStarted -and (Wait-MihomoStart $startTimeout)) {
     # Enable system proxy for Windows < 10
     if ($osVersion.Major -lt 10) {
         $proxyPort = Get-MixedPort
