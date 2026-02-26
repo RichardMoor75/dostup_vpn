@@ -520,12 +520,28 @@ try {
     New-Item -ItemType Directory -Force -Path $LOGS_DIR -ErrorAction Stop | Out-Null
     Write-OK "Folder created: $DOSTUP_DIR"
 } catch {
-    Write-Fail "Cannot create folder: $DOSTUP_DIR"
-    Write-Host ''
-    Write-Host 'Try running PowerShell as Administrator' -ForegroundColor Yellow
-    Write-Host 'Right-click PowerShell -> Run as Administrator' -ForegroundColor Yellow
-    Read-Host 'Press Enter to close'
-    exit 1
+    # C:\dostup failed (restricted system) — fall back to ProgramData
+    if ($DOSTUP_DIR -eq 'C:\dostup') {
+        Write-Info "Cannot create C:\dostup, using ProgramData..."
+        $DOSTUP_DIR = "$env:ProgramData\dostup"
+        $LOGS_DIR = "$DOSTUP_DIR\logs"
+        $CONFIG_FILE = "$DOSTUP_DIR\config.yaml"
+        $SETTINGS_FILE = "$DOSTUP_DIR\settings.json"
+        $MIHOMO_BIN = "$DOSTUP_DIR\mihomo.exe"
+        try {
+            New-Item -ItemType Directory -Force -Path $DOSTUP_DIR -ErrorAction Stop | Out-Null
+            New-Item -ItemType Directory -Force -Path $LOGS_DIR -ErrorAction Stop | Out-Null
+            Write-OK "Folder created: $DOSTUP_DIR"
+        } catch {
+            Write-Fail "Cannot create folder: $DOSTUP_DIR"
+            Read-Host 'Press Enter to close'
+            exit 1
+        }
+    } else {
+        Write-Fail "Cannot create folder: $DOSTUP_DIR"
+        Read-Host 'Press Enter to close'
+        exit 1
+    }
 }
 
 # Restrict ACL when installing outside user profile (e.g. C:\dostup)
