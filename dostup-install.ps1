@@ -141,28 +141,16 @@ function Test-LocalPortListening($port) {
 
 function Wait-MihomoStart($timeoutSec = 5) {
     $proxyPort = Get-MixedPort
-    $stableProcSeconds = 0
     for ($i = 0; $i -lt $timeoutSec; $i++) {
         $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-        $portListening = Test-LocalPortListening $proxyPort
-        if ($proc -and $portListening) {
+        if ($proc -and (Test-LocalPortListening $proxyPort)) {
             return $true
         }
-        if ($proc) {
-            $stableProcSeconds++
-            if ($stableProcSeconds -ge 3) {
-                return $true
-            }
-        } else {
-            $stableProcSeconds = 0
-        }
+        if (-not $proc) { return $false }
         Start-Sleep -Seconds 1
     }
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-    if (-not $proc) {
-        return $false
-    }
-    return (Test-LocalPortListening $proxyPort)
+    return ($proc -and (Test-LocalPortListening $proxyPort))
 }
 
 function Invoke-DownloadWithRetryJob($url, $output, $maxRetries = 3) {
@@ -485,18 +473,33 @@ Start-Sleep -Seconds 3
 # Remove current location (only if it's ours)
 if ((Test-Path $DOSTUP_DIR) -and ((Test-Path "$DOSTUP_DIR\mihomo.exe") -or (Test-Path "$DOSTUP_DIR\settings.json") -or (Test-Path "$DOSTUP_DIR\Dostup_VPN.ps1"))) {
     Write-Step 'Removing old installation...'
-    # Retry removal in case files are still locked (self-update race)
-    $maxRetries = 20
-    for ($attempt = 1; $attempt -le $maxRetries -and (Test-Path $DOSTUP_DIR); $attempt++) {
-        Remove-Item -Recurse -Force $DOSTUP_DIR -ErrorAction SilentlyContinue
-        if (Test-Path $DOSTUP_DIR) {
+    # Rename first (atomic on NTFS), then delete — avoids partial deletion
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $parentDir = Split-Path $DOSTUP_DIR -Parent
+    $oldName = Split-Path $DOSTUP_DIR -Leaf
+    $renamedDir = Join-Path $parentDir "${oldName}.old-${timestamp}"
+    $renamed = $false
+    try {
+        Rename-Item -Path $DOSTUP_DIR -NewName (Split-Path $renamedDir -Leaf) -Force -ErrorAction Stop
+        $renamed = $true
+    } catch {
+        Write-Info 'Rename failed, trying direct removal...'
+    }
+    $targetToRemove = if ($renamed) { $renamedDir } else { $DOSTUP_DIR }
+    $maxRetries = 10
+    for ($attempt = 1; $attempt -le $maxRetries -and (Test-Path $targetToRemove); $attempt++) {
+        Remove-Item -Recurse -Force $targetToRemove -ErrorAction SilentlyContinue
+        if (Test-Path $targetToRemove) {
             if ($attempt -eq 1 -or $attempt % 3 -eq 0) {
                 Write-Info "Waiting for file locks to release... ($attempt/$maxRetries)"
             }
             Start-Sleep -Seconds 1
         }
     }
-    if (Test-Path $DOSTUP_DIR) {
+    if ($renamed -and (Test-Path $renamedDir)) {
+        # Renamed away but can't delete yet — not blocking, clean up later
+        Write-Info "Old installation renamed to $renamedDir (will be cleaned up later)"
+    } elseif (-not $renamed -and (Test-Path $DOSTUP_DIR)) {
         Write-Fail 'Could not remove old installation. Please close all programs using dostup folder and try again.'
         Read-Host 'Press Enter to close'
         exit 1
@@ -1075,28 +1078,16 @@ function Test-LocalPortListening($port) {
 
 function Wait-MihomoStart($timeoutSec = 5) {
     $proxyPort = Get-ProxyPort
-    $stableProcSeconds = 0
     for ($i = 0; $i -lt $timeoutSec; $i++) {
         $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-        $portListening = Test-LocalPortListening $proxyPort
-        if ($proc -and $portListening) {
+        if ($proc -and (Test-LocalPortListening $proxyPort)) {
             return $true
         }
-        if ($proc) {
-            $stableProcSeconds++
-            if ($stableProcSeconds -ge 3) {
-                return $true
-            }
-        } else {
-            $stableProcSeconds = 0
-        }
+        if (-not $proc) { return $false }
         Start-Sleep -Seconds 1
     }
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
-    if (-not $proc) {
-        return $false
-    }
-    return (Test-LocalPortListening $proxyPort)
+    return ($proc -and (Test-LocalPortListening $proxyPort))
 }
 
 function Enable-SystemProxy {
@@ -1320,6 +1311,21 @@ function Test-InstallerUpdate {
         # Скачиваем в файл чтобы хешировать сырые байты (без encoding-преобразований)
         $tmpFile = "$env:TEMP\dostup-installer-check.ps1"
         if (-not (Invoke-DownloadWithRetry $url $tmpFile) -or -not (Test-Path $tmpFile)) { return }
+
+        # Validate downloaded file before comparing hash
+        $fileSize = (Get-Item $tmpFile).Length
+        if ($fileSize -lt 10240) {
+            # Installer must be >10KB — likely a corrupt/partial download or error page
+            Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+            return
+        }
+        $fileHead = Get-Content $tmpFile -TotalCount 3 -ErrorAction SilentlyContinue
+        $headText = ($fileHead -join "`n")
+        if ($headText -notmatch 'Dostup.*Installer|Mihomo') {
+            # File doesn't look like our installer — could be HTML error page or tampered
+            Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+            return
+        }
 
         $sha = [System.Security.Cryptography.SHA256]::Create()
         $rawBytes = [System.IO.File]::ReadAllBytes($tmpFile)
@@ -2133,6 +2139,7 @@ function Set-DostupDns {
 
     $saveData = @{
         InterfaceAlias = $alias
+        InterfaceIndex = $adapter.InterfaceIndex
         OriginalDns = $originalAddresses
     }
     $json = $saveData | ConvertTo-Json
@@ -2152,9 +2159,17 @@ function Restore-DostupDns {
         $saved = Get-Content $DNS_SAVE_FILE -Raw | ConvertFrom-Json
         $alias = $saved.InterfaceAlias
 
-        # Check adapter still exists
+        # Check adapter still exists — try by alias first, then by InterfaceIndex
         $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue
+        if (-not $adapter -and $saved.InterfaceIndex) {
+            $adapter = Get-NetAdapter | Where-Object { $_.InterfaceIndex -eq $saved.InterfaceIndex } | Select-Object -First 1
+            if ($adapter) {
+                $alias = $adapter.InterfaceAlias
+                Write-Host "[DNS] Adapter renamed, found by index: $alias" -ForegroundColor Yellow
+            }
+        }
         if (-not $adapter) {
+            Write-Host "[DNS] Adapter not found (alias=$($saved.InterfaceAlias), index=$($saved.InterfaceIndex))" -ForegroundColor Yellow
             Remove-Item $DNS_SAVE_FILE -Force -ErrorAction SilentlyContinue
             return
         }
