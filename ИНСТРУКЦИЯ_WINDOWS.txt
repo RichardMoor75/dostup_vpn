@@ -216,7 +216,7 @@ PPPoE подключения (Ростелеком, Дом.ру и др.) тре
 
    sc.exe stop DostupVPN 2>$null; sc.exe delete DostupVPN 2>$null
    Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
-   Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+   Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
    $d = if (Test-Path "C:\dostup\mihomo.exe") { "C:\dostup" } elseif (Test-Path "$env:ProgramData\dostup\mihomo.exe") { "$env:ProgramData\dostup" } else { "$env:USERPROFILE\dostup" }
    powershell -ExecutionPolicy Bypass -NoProfile -File "$d\dns-helper.ps1" restore 2>$null
    Remove-Item -Recurse -Force $d

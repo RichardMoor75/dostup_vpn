@@ -198,7 +198,7 @@ rm -rf ~/Desktop/Dostup_VPN.app 2>/dev/null
 # Остановить сервис, VPN и tray-приложение
 sc.exe stop DostupVPN 2>$null; sc.exe delete DostupVPN 2>$null
 Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
-Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" |
+Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" |
     Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 # Определить папку установки
