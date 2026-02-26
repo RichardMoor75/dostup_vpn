@@ -40,7 +40,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 - Создаёт приложение `Dostup_VPN` (macOS — ~/Applications, Windows — ярлык на рабочем столе) и systemd-сервис (Linux)
 - Настраивает брандмауэр и исключение Windows Defender (macOS Application Firewall / Windows Firewall)
 - Защита от DNS-утечки: автопереключение DNS на 8.8.8.8/9.9.9.9 при старте VPN (macOS, Windows 10+)
-- Запускает Mihomo
+- Запускает Mihomo и проверяет доступность нод (healthcheck) — если ни одна нода не отвечает, предупреждает и предлагает остановить VPN
 
 ## Управление
 
@@ -119,7 +119,7 @@ wget https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-in
 ```
 ~/dostup/                    # macOS: /Users/username/dostup/
 %USERPROFILE%\dostup\        # Windows: C:\Users\username\dostup\
-                             # (или %ProgramData%\dostup\ если имя профиля содержит кириллицу)
+                             # (или C:\dostup\ если имя профиля содержит кириллицу)
 /opt/dostup/                 # Linux
 
 ├── mihomo                   # Ядро (mihomo.exe на Windows)
@@ -202,7 +202,7 @@ Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" |
     Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 # Определить папку установки
-$d = if (Test-Path "$env:ProgramData\dostup\mihomo.exe") { "$env:ProgramData\dostup" } else { "$env:USERPROFILE\dostup" }
+$d = if (Test-Path "C:\dostup\mihomo.exe") { "C:\dostup" } elseif (Test-Path "$env:ProgramData\dostup\mihomo.exe") { "$env:ProgramData\dostup" } else { "$env:USERPROFILE\dostup" }
 # Восстановить DNS (Win 10+)
 powershell -ExecutionPolicy Bypass -NoProfile -File "$d\dns-helper.ps1" restore 2>$null
 # Удалить файлы и ярлыки
