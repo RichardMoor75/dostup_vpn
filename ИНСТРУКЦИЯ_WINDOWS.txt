@@ -97,7 +97,8 @@
 Если сайты недоступны — VPN не работает или не запущен.
 
 Изменить список сайтов для проверки:
-   Откройте файл C:\Users\ВашеИмя\dostup\sites.json
+   Откройте файл sites.json в папке dostup
+   (путь к папке показывается при запуске скрипта)
    и добавьте/удалите нужные сайты.
 
 -------------------------------------
@@ -140,7 +141,7 @@ https://metacubex.github.io/metacubexd/
 
 1. Нажмите Win + R
 2. Введите: %USERPROFILE%\dostup\settings.json
-   (если папка не найдена, попробуйте: %ProgramData%\dostup\settings.json)
+   (если папка не найдена, попробуйте: C:\dostup\settings.json)
 3. Откройте файл Блокнотом
 4. Измените значение "subscription_url"
 5. Сохраните файл
@@ -168,7 +169,8 @@ Windows Defender блокирует файл:
    → Проверьте что URL подписки правильный
    → Запустите Dostup_VPN → выберите "Перезапустить"
    → Попробуйте "Проверить доступ" чтобы увидеть статус
-   → Проверьте логи: %USERPROFILE%\dostup\logs\ (или %ProgramData%\dostup\logs\)
+   → Проверьте логи (путь показывается при запуске скрипта):
+     %USERPROFILE%\dostup\logs\ или C:\dostup\logs\
 
 "Выполнение скриптов отключено":
    → Откройте PowerShell от администратора
@@ -215,7 +217,7 @@ PPPoE подключения (Ростелеком, Дом.ру и др.) тре
    sc.exe stop DostupVPN 2>$null; sc.exe delete DostupVPN 2>$null
    Stop-Process -Name mihomo -Force -ErrorAction SilentlyContinue
    Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -match 'DostupVPN-Tray' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-   $d = if (Test-Path "$env:ProgramData\dostup\mihomo.exe") { "$env:ProgramData\dostup" } else { "$env:USERPROFILE\dostup" }
+   $d = if (Test-Path "C:\dostup\mihomo.exe") { "C:\dostup" } elseif (Test-Path "$env:ProgramData\dostup\mihomo.exe") { "$env:ProgramData\dostup" } else { "$env:USERPROFILE\dostup" }
    powershell -ExecutionPolicy Bypass -NoProfile -File "$d\dns-helper.ps1" restore 2>$null
    Remove-Item -Recurse -Force $d
    Remove-Item "$env:USERPROFILE\Desktop\Dostup_VPN.lnk" -ErrorAction SilentlyContinue
