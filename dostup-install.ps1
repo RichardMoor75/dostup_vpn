@@ -29,6 +29,15 @@ function Write-OK($text) { Write-Host "[OK] $text" -ForegroundColor Green }
 function Write-Fail($text) { Write-Host "[FAIL] $text" -ForegroundColor Red }
 function Write-Info($text) { Write-Host "[i] $text" -ForegroundColor Blue }
 
+# PS 7.4+ removed Get-WmiObject; use Get-CimInstance when available
+function Get-Win32Process($filter) {
+    if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+        Get-CimInstance Win32_Process -Filter $filter -ErrorAction SilentlyContinue
+    } else {
+        Get-WmiObject Win32_Process -Filter $filter -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-Avx2Support {
     try {
         Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int feature);' -Name CpuFeature -Namespace Win32 -ErrorAction Stop
@@ -260,21 +269,32 @@ function Expand-ZipFile($zipPath, $destPath) {
     if ($PSVersionTable.PSVersion.Major -ge 5) {
         Expand-Archive -Path $zipPath -DestinationPath $destPath -Force
     } else {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
         try {
-            foreach ($entry in $archive.Entries) {
-                $entryPath = Join-Path $destPath $entry.FullName
-                $entryDir = Split-Path $entryPath -Parent
-                if (-not (Test-Path $entryDir)) {
-                    New-Item -ItemType Directory -Path $entryDir -Force | Out-Null
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+            try {
+                foreach ($entry in $archive.Entries) {
+                    $entryPath = Join-Path $destPath $entry.FullName
+                    $entryDir = Split-Path $entryPath -Parent
+                    if (-not (Test-Path $entryDir)) {
+                        New-Item -ItemType Directory -Path $entryDir -Force | Out-Null
+                    }
+                    if ($entry.FullName -notmatch '[\\/]$') {
+                        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $entryPath, $true)
+                    }
                 }
-                if ($entry.FullName -notmatch '[\\/]$') {
-                    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $entryPath, $true)
-                }
+            } finally {
+                $archive.Dispose()
             }
-        } finally {
-            $archive.Dispose()
+        } catch {
+            # Fallback for .NET 3.5 (Win 7 without .NET 4.5)
+            $shell = New-Object -ComObject Shell.Application
+            $zip = $shell.NameSpace((Resolve-Path $zipPath).Path)
+            if (-not (Test-Path $destPath)) {
+                New-Item -ItemType Directory -Path $destPath -Force | Out-Null
+            }
+            $dest = $shell.NameSpace((Resolve-Path $destPath).Path)
+            $dest.CopyHere($zip.Items(), 0x14) # 0x14 = overwrite + no progress dialog
         }
     }
 }
@@ -426,7 +446,7 @@ if ($hadMihomo -or $serviceExists) {
 }
 
 # Kill existing tray process if running
-$trayProcs = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+$trayProcs = Get-Win32Process "Name = 'powershell.exe'" |
     Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
 if ($trayProcs) {
     Write-Step 'Stopping tray application...'
@@ -441,7 +461,7 @@ $oldLocations = @("$env:USERPROFILE\dostup", "$env:ProgramData\dostup", 'C:\dost
 # Stop old control scripts from ALL known locations
 $escapedDostupDir = [regex]::Escape("$DOSTUP_DIR\")
 $escapedOldDirs = $oldLocations | ForEach-Object { [regex]::Escape("$_\") }
-$controlProcs = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+$controlProcs = Get-Win32Process "Name = 'powershell.exe'" |
     Where-Object {
         if ($_.ProcessId -eq $PID) { return $false }
         if ($_.CommandLine -match $escapedDostupDir) { return $true }
@@ -575,7 +595,9 @@ if ($DOSTUP_DIR -notlike "$env:USERPROFILE*") {
 
 Write-Step 'Detecting architecture...'
 $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
-if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $arch = 'arm64' }
+# Native arch from registry — correct even under x64 emulation on ARM64
+$nativeArch = try { (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $env:PROCESSOR_ARCHITECTURE }
+if ($nativeArch -eq 'ARM64') { $arch = 'arm64' }
 Write-OK "Architecture: $arch"
 
 Write-Step 'Getting latest mihomo version...'
@@ -886,6 +908,14 @@ function Write-OK($t) { Write-Host "[OK] $t" -ForegroundColor Green }
 function Write-Fail($t) { Write-Host "[FAIL] $t" -ForegroundColor Red }
 function Write-Info($t) { Write-Host "[i] $t" -ForegroundColor Blue }
 
+function Get-Win32Process($filter) {
+    if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+        Get-CimInstance Win32_Process -Filter $filter -ErrorAction SilentlyContinue
+    } else {
+        Get-WmiObject Win32_Process -Filter $filter -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-Avx2Support {
     try {
         Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int feature);' -Name CpuFeature -Namespace Win32 -ErrorAction Stop
@@ -1002,21 +1032,32 @@ function Expand-ZipFile($zipPath, $destPath) {
     if ($PSVersionTable.PSVersion.Major -ge 5) {
         Expand-Archive -Path $zipPath -DestinationPath $destPath -Force
     } else {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
         try {
-            foreach ($entry in $archive.Entries) {
-                $entryPath = Join-Path $destPath $entry.FullName
-                $entryDir = Split-Path $entryPath -Parent
-                if (-not (Test-Path $entryDir)) {
-                    New-Item -ItemType Directory -Path $entryDir -Force | Out-Null
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+            try {
+                foreach ($entry in $archive.Entries) {
+                    $entryPath = Join-Path $destPath $entry.FullName
+                    $entryDir = Split-Path $entryPath -Parent
+                    if (-not (Test-Path $entryDir)) {
+                        New-Item -ItemType Directory -Path $entryDir -Force | Out-Null
+                    }
+                    if ($entry.FullName -notmatch '[\\/]$') {
+                        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $entryPath, $true)
+                    }
                 }
-                if ($entry.FullName -notmatch '[\\/]$') {
-                    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $entryPath, $true)
-                }
+            } finally {
+                $archive.Dispose()
             }
-        } finally {
-            $archive.Dispose()
+        } catch {
+            # Fallback for .NET 3.5 (Win 7 without .NET 4.5)
+            $shell = New-Object -ComObject Shell.Application
+            $zip = $shell.NameSpace((Resolve-Path $zipPath).Path)
+            if (-not (Test-Path $destPath)) {
+                New-Item -ItemType Directory -Path $destPath -Force | Out-Null
+            }
+            $dest = $shell.NameSpace((Resolve-Path $destPath).Path)
+            $dest.CopyHere($zip.Items(), 0x14) # 0x14 = overwrite + no progress dialog
         }
     }
 }
@@ -1164,14 +1205,21 @@ function Invoke-Healthcheck {
     Write-Host ''
 
     $api = 'http://127.0.0.1:9090'
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $maxSeconds = 60
 
     try {
         $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
         foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
             if ($name -eq 'default') { continue }
+            if ($sw.Elapsed.TotalSeconds -ge $maxSeconds) {
+                Write-Info "Таймаут ${maxSeconds}с — пропускаю оставшиеся провайдеры"
+                break
+            }
             # Run healthcheck
+            $remaining = [math]::Max(5, $maxSeconds - [int]$sw.Elapsed.TotalSeconds)
             try {
-                Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 30 | Out-Null
+                Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec $remaining | Out-Null
             } catch {
                 Write-Fail "$name — ошибка healthcheck: $_"
                 continue
@@ -1370,7 +1418,8 @@ function Start-Mihomo {
         if ($settings.installed_version -ne $latest) {
             Write-Step "Обновление: $($settings.installed_version) → $latest"
             $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { '386' }
-            if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { $arch = 'arm64' }
+            $nativeArch = try { (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $env:PROCESSOR_ARCHITECTURE }
+            if ($nativeArch -eq 'ARM64') { $arch = 'arm64' }
             # Use compatible build for older Windows or CPUs without AVX2
             $osVer = [Environment]::OSVersion.Version
             if ($arch -eq 'amd64' -and ($osVer.Major -lt 10 -or -not (Test-Avx2Support))) {
@@ -1473,13 +1522,17 @@ function Start-Mihomo {
         Start-Sleep -Seconds 3
         try {
             $api = 'http://127.0.0.1:9090'
+            $hcSw = [System.Diagnostics.Stopwatch]::StartNew()
+            $hcMax = 60
             $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
             $totalAlive = 0
             $totalNodes = 0
             foreach ($pName in $proxyData.providers.PSObject.Properties.Name) {
                 if ($pName -eq 'default') { continue }
+                if ($hcSw.Elapsed.TotalSeconds -ge $hcMax) { break }
+                $hcRemaining = [math]::Max(5, $hcMax - [int]$hcSw.Elapsed.TotalSeconds)
                 try {
-                    Invoke-WebRequest -Uri "$api/providers/proxies/$pName/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+                    Invoke-WebRequest -Uri "$api/providers/proxies/$pName/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec $hcRemaining | Out-Null
                     $details = Invoke-WebRequest -Uri "$api/providers/proxies/$pName" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
                     foreach ($px in $details.proxies) {
                         $totalNodes++
@@ -1666,7 +1719,7 @@ if ($proc) {
     # Запускаем tray если установлен но не запущен
     $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
     $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
-    $trayRunning = Get-WmiObject Win32_Process -Filter "Name = 'powershell.exe'" -ErrorAction SilentlyContinue |
+    $trayRunning = Get-Win32Process "Name = 'powershell.exe'" |
         Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
     if (-not $trayRunning) {
         if (Test-Path $trayScript) {
@@ -1992,10 +2045,14 @@ $miHealthcheck.Add_Click({
         $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
         $summaryLines = @()
         $hasErrors = $false
+        $hcSw = [System.Diagnostics.Stopwatch]::StartNew()
+        $hcMax = 60
         foreach ($name in $proxyData.providers.PSObject.Properties.Name) {
             if ($name -eq 'default') { continue }
+            if ($hcSw.Elapsed.TotalSeconds -ge $hcMax) { $summaryLines += '...timeout'; break }
+            $hcRemaining = [math]::Max(5, $hcMax - [int]$hcSw.Elapsed.TotalSeconds)
             try {
-                Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 30 | Out-Null
+                Invoke-WebRequest -Uri "$api/providers/proxies/$name/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec $hcRemaining | Out-Null
             } catch { $hasErrors = $true; continue }
 
             try {
@@ -2096,20 +2153,12 @@ function Repair-CyrillicAdapters {
     } catch {}
 }
 
-function Get-ActiveAdapter {
-    # Find active non-virtual, non-TUN adapter
-    $adapters = Get-NetAdapter | Where-Object {
+function Get-ActiveAdapters {
+    # Find all active non-virtual, non-TUN adapters
+    $adapters = @(Get-NetAdapter | Where-Object {
         $_.Status -eq 'Up' -and
         $_.InterfaceDescription -notmatch 'Hyper-V|Loopback|TAP-Windows|Wintun|WireGuard|VPN'
-    }
-    if ($adapters -is [array]) {
-        # Prefer physical adapters (Wi-Fi or Ethernet)
-        $preferred = $adapters | Where-Object { $_.InterfaceDescription -match 'Wi-Fi|Wireless|Ethernet|Realtek|Intel|Broadcom|Qualcomm|Killer|Marvell' }
-        if ($preferred) {
-            if ($preferred -is [array]) { return $preferred[0] } else { return $preferred }
-        }
-        return $adapters[0]
-    }
+    })
     return $adapters
 }
 
@@ -2117,38 +2166,68 @@ function Set-DostupDns {
     # Fix Cyrillic adapter names before DNS setup
     Repair-CyrillicAdapters
 
-    $adapter = Get-ActiveAdapter
-    if (-not $adapter) {
+    $adapters = Get-ActiveAdapters
+    if (-not $adapters -or $adapters.Count -eq 0) {
         Write-Host '[DNS] No active network adapter found' -ForegroundColor Yellow
         return
     }
-    $alias = $adapter.InterfaceAlias
 
-    # Save original DNS
-    $currentDns = Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue
-    $originalAddresses = @()
-    if ($currentDns -and $currentDns.ServerAddresses) {
-        # Don't save if already set to our DNS
-        $current = ($currentDns.ServerAddresses | Sort-Object) -join ','
-        if ($current -eq '8.8.8.8,9.9.9.9' -or $current -eq '9.9.9.9,8.8.8.8') {
-            Write-Host "[DNS] Already set to 8.8.8.8/9.9.9.9 on $alias" -ForegroundColor Green
-            return
+    # Save original DNS for all adapters, then set ours
+    $adapterEntries = @()
+    foreach ($adapter in $adapters) {
+        $alias = $adapter.InterfaceAlias
+        $currentDns = Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        $originalAddresses = @()
+        if ($currentDns -and $currentDns.ServerAddresses) {
+            $current = ($currentDns.ServerAddresses | Sort-Object) -join ','
+            if ($current -eq '8.8.8.8,9.9.9.9' -or $current -eq '9.9.9.9,8.8.8.8') {
+                Write-Host "[DNS] Already set to 8.8.8.8/9.9.9.9 on $alias" -ForegroundColor Green
+                continue
+            }
+            $originalAddresses = @($currentDns.ServerAddresses)
         }
-        $originalAddresses = @($currentDns.ServerAddresses)
+        $adapterEntries += @{
+            InterfaceAlias = $alias
+            InterfaceIndex = $adapter.InterfaceIndex
+            OriginalDns = $originalAddresses
+        }
     }
 
-    $saveData = @{
-        InterfaceAlias = $alias
-        InterfaceIndex = $adapter.InterfaceIndex
-        OriginalDns = $originalAddresses
-    }
-    $json = $saveData | ConvertTo-Json
+    if ($adapterEntries.Count -eq 0) { return }
+
+    $saveData = @{ Adapters = $adapterEntries }
+    $json = $saveData | ConvertTo-Json -Depth 3
     [System.IO.File]::WriteAllText($DNS_SAVE_FILE, $json, (New-Object System.Text.UTF8Encoding($false)))
 
-    # Set public DNS
-    Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses @('8.8.8.8','9.9.9.9')
+    # Set public DNS on all adapters
+    foreach ($entry in $adapterEntries) {
+        Set-DnsClientServerAddress -InterfaceAlias $entry.InterfaceAlias -ServerAddresses @('8.8.8.8','9.9.9.9')
+        Write-Host "[DNS] Set 8.8.8.8/9.9.9.9 on $($entry.InterfaceAlias)" -ForegroundColor Green
+    }
     & ipconfig /flushdns 2>$null | Out-Null
-    Write-Host "[DNS] Set 8.8.8.8/9.9.9.9 on $alias" -ForegroundColor Green
+}
+
+function Restore-SingleAdapter($entry) {
+    $alias = $entry.InterfaceAlias
+    $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue
+    if (-not $adapter -and $entry.InterfaceIndex) {
+        $adapter = Get-NetAdapter | Where-Object { $_.InterfaceIndex -eq $entry.InterfaceIndex } | Select-Object -First 1
+        if ($adapter) {
+            $alias = $adapter.InterfaceAlias
+            Write-Host "[DNS] Adapter renamed, found by index: $alias" -ForegroundColor Yellow
+        }
+    }
+    if (-not $adapter) {
+        Write-Host "[DNS] Adapter not found (alias=$($entry.InterfaceAlias), index=$($entry.InterfaceIndex))" -ForegroundColor Yellow
+        return
+    }
+    if ($entry.OriginalDns -and $entry.OriginalDns.Count -gt 0) {
+        Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses $entry.OriginalDns
+        Write-Host "[DNS] Restored to $($entry.OriginalDns -join ', ') on $alias" -ForegroundColor Green
+    } else {
+        Set-DnsClientServerAddress -InterfaceAlias $alias -ResetServerAddresses
+        Write-Host "[DNS] Restored to DHCP on $alias" -ForegroundColor Green
+    }
 }
 
 function Restore-DostupDns {
@@ -2157,30 +2236,15 @@ function Restore-DostupDns {
     }
     try {
         $saved = Get-Content $DNS_SAVE_FILE -Raw | ConvertFrom-Json
-        $alias = $saved.InterfaceAlias
 
-        # Check adapter still exists — try by alias first, then by InterfaceIndex
-        $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue
-        if (-not $adapter -and $saved.InterfaceIndex) {
-            $adapter = Get-NetAdapter | Where-Object { $_.InterfaceIndex -eq $saved.InterfaceIndex } | Select-Object -First 1
-            if ($adapter) {
-                $alias = $adapter.InterfaceAlias
-                Write-Host "[DNS] Adapter renamed, found by index: $alias" -ForegroundColor Yellow
+        if ($saved.Adapters) {
+            # New multi-adapter format
+            foreach ($entry in $saved.Adapters) {
+                Restore-SingleAdapter $entry
             }
-        }
-        if (-not $adapter) {
-            Write-Host "[DNS] Adapter not found (alias=$($saved.InterfaceAlias), index=$($saved.InterfaceIndex))" -ForegroundColor Yellow
-            Remove-Item $DNS_SAVE_FILE -Force -ErrorAction SilentlyContinue
-            return
-        }
-
-        if ($saved.OriginalDns -and $saved.OriginalDns.Count -gt 0) {
-            Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses $saved.OriginalDns
-            Write-Host "[DNS] Restored to $($saved.OriginalDns -join ', ') on $alias" -ForegroundColor Green
-        } else {
-            # Original was DHCP
-            Set-DnsClientServerAddress -InterfaceAlias $alias -ResetServerAddresses
-            Write-Host "[DNS] Restored to DHCP on $alias" -ForegroundColor Green
+        } elseif ($saved.InterfaceAlias) {
+            # Old single-adapter format (backward compat)
+            Restore-SingleAdapter $saved
         }
         & ipconfig /flushdns 2>$null | Out-Null
         Remove-Item $DNS_SAVE_FILE -Force -ErrorAction SilentlyContinue
@@ -2475,13 +2539,17 @@ if ($mihomoStarted -and (Wait-MihomoStart $startTimeout)) {
     Start-Sleep -Seconds 3
     try {
         $api = 'http://127.0.0.1:9090'
+        $hcSw = [System.Diagnostics.Stopwatch]::StartNew()
+        $hcMax = 60
         $proxyData = Invoke-WebRequest -Uri "$api/providers/proxies" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
         $totalAlive = 0
         $totalNodes = 0
         foreach ($pName in $proxyData.providers.PSObject.Properties.Name) {
             if ($pName -eq 'default') { continue }
+            if ($hcSw.Elapsed.TotalSeconds -ge $hcMax) { break }
+            $hcRemaining = [math]::Max(5, $hcMax - [int]$hcSw.Elapsed.TotalSeconds)
             try {
-                Invoke-WebRequest -Uri "$api/providers/proxies/$pName/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec 15 | Out-Null
+                Invoke-WebRequest -Uri "$api/providers/proxies/$pName/healthcheck" -UseBasicParsing -ErrorAction Stop -TimeoutSec $hcRemaining | Out-Null
                 $details = Invoke-WebRequest -Uri "$api/providers/proxies/$pName" -UseBasicParsing -TimeoutSec 5 | ConvertFrom-Json
                 foreach ($px in $details.proxies) {
                     $totalNodes++
