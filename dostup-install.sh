@@ -689,6 +689,9 @@ do_update() {
     require_root "restart"
     check_script_update
 
+    # Останавливаем сервис до обновления, чтобы освободить порт
+    systemctl stop dostup 2>/dev/null || true
+
     # 1. Проверка обновления ядра
     print_step "Проверка обновлений ядра..."
     local current_version
@@ -713,7 +716,6 @@ do_update() {
 
         if download_with_retry "$url" "$DOSTUP_DIR/mihomo.gz"; then
             if verify_mihomo_checksum "$latest_version" "$filename" "$DOSTUP_DIR/mihomo.gz"; then
-                systemctl stop dostup 2>/dev/null || true
                 gunzip -f "$DOSTUP_DIR/mihomo.gz"
                 chmod +x "$MIHOMO_BIN"
                 update_settings "installed_version" "$latest_version"
@@ -781,8 +783,8 @@ do_update() {
         fi
     fi
 
-    # 4. Перезапуск
-    systemctl restart dostup
+    # 4. Запуск (сервис уже остановлен в начале do_update)
+    systemctl start dostup
     sleep 1
     if systemctl is-active --quiet dostup; then
         local port
