@@ -45,20 +45,52 @@ function Test-Avx2Support {
     } catch { return $false }
 }
 
+function Test-WscriptAvailable {
+    $wscriptPath = Join-Path $env:WINDIR 'System32\wscript.exe'
+    if (-not (Test-Path $wscriptPath)) { return $false }
+
+    foreach ($settingsPath in @(
+        'HKCU:\Software\Microsoft\Windows Script Host\Settings',
+        'HKLM:\Software\Microsoft\Windows Script Host\Settings'
+    )) {
+        try {
+            $enabled = (Get-ItemProperty -Path $settingsPath -Name Enabled -ErrorAction Stop).Enabled
+            if ($enabled -eq 0) { return $false }
+        } catch { }
+    }
+
+    $tmpVbs = Join-Path $env:TEMP ("dostup-wscript-test-{0}.vbs" -f $PID)
+    try {
+        [System.IO.File]::WriteAllText($tmpVbs, 'WScript.Quit 0', [System.Text.Encoding]::ASCII)
+        $proc = Start-Process -FilePath $wscriptPath -ArgumentList "`"$tmpVbs`"" -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+        return ($proc.ExitCode -eq 0)
+    } catch {
+        return $false
+    } finally {
+        Remove-Item $tmpVbs -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Start-TrayApplication {
     $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
     $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
+    $trayRunning = Get-Win32Process "Name = 'powershell.exe'" |
+        Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
 
-    if (Test-Path $trayScript) {
+    if ($trayRunning) {
+        return $true
+    }
+
+    if ((Test-Path $trayVbs) -and (Test-WscriptAvailable)) {
         try {
-            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden -ErrorAction Stop
+            Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden -ErrorAction Stop
             return $true
         } catch { }
     }
 
-    if (Test-Path $trayVbs) {
+    if (Test-Path $trayScript) {
         try {
-            Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden -ErrorAction Stop
+            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden -ErrorAction Stop
             return $true
         } catch { }
     }
@@ -155,7 +187,6 @@ function Wait-MihomoStart($timeoutSec = 5) {
         if ($proc -and (Test-LocalPortListening $proxyPort)) {
             return $true
         }
-        if (-not $proc) { return $false }
         Start-Sleep -Seconds 1
     }
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
@@ -923,20 +954,52 @@ function Test-Avx2Support {
     } catch { return $false }
 }
 
+function Test-WscriptAvailable {
+    $wscriptPath = Join-Path $env:WINDIR 'System32\wscript.exe'
+    if (-not (Test-Path $wscriptPath)) { return $false }
+
+    foreach ($settingsPath in @(
+        'HKCU:\Software\Microsoft\Windows Script Host\Settings',
+        'HKLM:\Software\Microsoft\Windows Script Host\Settings'
+    )) {
+        try {
+            $enabled = (Get-ItemProperty -Path $settingsPath -Name Enabled -ErrorAction Stop).Enabled
+            if ($enabled -eq 0) { return $false }
+        } catch { }
+    }
+
+    $tmpVbs = Join-Path $env:TEMP ("dostup-wscript-test-{0}.vbs" -f $PID)
+    try {
+        [System.IO.File]::WriteAllText($tmpVbs, 'WScript.Quit 0', [System.Text.Encoding]::ASCII)
+        $proc = Start-Process -FilePath $wscriptPath -ArgumentList "`"$tmpVbs`"" -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
+        return ($proc.ExitCode -eq 0)
+    } catch {
+        return $false
+    } finally {
+        Remove-Item $tmpVbs -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Start-TrayApplication {
     $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
     $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
+    $trayRunning = Get-Win32Process "Name = 'powershell.exe'" |
+        Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
 
-    if (Test-Path $trayScript) {
+    if ($trayRunning) {
+        return $true
+    }
+
+    if ((Test-Path $trayVbs) -and (Test-WscriptAvailable)) {
         try {
-            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden -ErrorAction Stop
+            Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden -ErrorAction Stop
             return $true
         } catch { }
     }
 
-    if (Test-Path $trayVbs) {
+    if (Test-Path $trayScript) {
         try {
-            Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden -ErrorAction Stop
+            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden -ErrorAction Stop
             return $true
         } catch { }
     }
@@ -1124,7 +1187,6 @@ function Wait-MihomoStart($timeoutSec = 5) {
         if ($proc -and (Test-LocalPortListening $proxyPort)) {
             return $true
         }
-        if (-not $proc) { return $false }
         Start-Sleep -Seconds 1
     }
     $proc = Get-Process -Name 'mihomo' -ErrorAction SilentlyContinue
@@ -1717,23 +1779,7 @@ if ($proc) {
     # Mihomo не запущен — запускаем
     Start-Mihomo | Out-Null
     # Запускаем tray если установлен но не запущен
-    $trayScript = "$DOSTUP_DIR\DostupVPN-Tray.ps1"
-    $trayVbs = "$DOSTUP_DIR\LaunchTray.vbs"
-    $trayRunning = Get-Win32Process "Name = 'powershell.exe'" |
-        Where-Object { $_.CommandLine -match 'DostupVPN-Tray\.ps1' }
-    if (-not $trayRunning) {
-        if (Test-Path $trayScript) {
-            try {
-                Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$trayScript`"" -WindowStyle Hidden -ErrorAction Stop
-            } catch {
-                if (Test-Path $trayVbs) {
-                    Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden
-                }
-            }
-        } elseif (Test-Path $trayVbs) {
-            Start-Process wscript.exe -ArgumentList "`"$trayVbs`"" -WindowStyle Hidden
-        }
-    }
+    Start-TrayApplication | Out-Null
     Write-Host ''
     Write-Host 'Окно закроется через 5 секунд...'
     Start-Sleep -Seconds 5
@@ -2302,8 +2348,15 @@ Write-OK 'Tray launcher created'
 Write-Step 'Creating startup shortcut for tray...'
 $startupFolder = [Environment]::GetFolderPath('Startup')
 $trayLnk = $WshShell.CreateShortcut("$startupFolder\DostupVPN-Tray.lnk")
-$trayLnk.TargetPath = "powershell.exe"
-$trayLnk.Arguments = "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$DOSTUP_DIR\DostupVPN-Tray.ps1`""
+$wscriptPath = Join-Path $env:WINDIR 'System32\wscript.exe'
+if (Test-WscriptAvailable) {
+    $trayLnk.TargetPath = $wscriptPath
+    $trayLnk.Arguments = "`"$DOSTUP_DIR\LaunchTray.vbs`""
+} else {
+    $trayLnk.TargetPath = "powershell.exe"
+    $trayLnk.Arguments = "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$DOSTUP_DIR\DostupVPN-Tray.ps1`""
+    Write-Info 'wscript unavailable, using PowerShell fallback for tray autostart'
+}
 $trayLnk.WorkingDirectory = $DOSTUP_DIR
 if (Test-Path $iconPath) {
     $trayLnk.IconLocation = "$iconPath,0"
