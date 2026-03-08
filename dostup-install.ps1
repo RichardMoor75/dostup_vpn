@@ -1565,7 +1565,7 @@ function Start-Mihomo {
     } else {
         Start-Process cmd.exe -ArgumentList "/c powershell -ExecutionPolicy Bypass -NoProfile -File `"$DOSTUP_DIR\dns-helper.ps1`" set & `"`"$MIHOMO_BIN`" -d `"$DOSTUP_DIR`" > `"$DOSTUP_DIR\logs\mihomo.log`" 2>&1`"" -Verb RunAs -WindowStyle Hidden
     }
-    $startTimeout = if ($env:USERPROFILE -match '[^\x00-\x7F]') { 15 } else { 5 }
+    $startTimeout = if ($env:USERPROFILE -match '[^\x00-\x7F]') { 15 } else { 10 }
     if (Wait-MihomoStart $startTimeout) {
         Enable-SystemProxy
         Write-Host ''
@@ -2558,7 +2558,7 @@ if ($serviceCreated) {
         Write-Host 'Please accept the UAC prompt when restarting from the desktop shortcut.' -ForegroundColor Yellow
     }
 }
-$startTimeout = if ($env:USERPROFILE -match '[^\x00-\x7F]') { 15 } else { 5 }
+$startTimeout = if ($env:USERPROFILE -match '[^\x00-\x7F]') { 15 } else { 10 }
 if ($mihomoStarted -and (Wait-MihomoStart $startTimeout)) {
     # Enable system proxy for Windows < 10
     if ($osVersion.Major -lt 10) {
