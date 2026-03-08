@@ -1407,9 +1407,10 @@ function Save-Settings($s) {
 }
 
 function Start-InstallerUpdateProcess($installerPath) {
-    $escaped = $installerPath.Replace("'", "''")
-    $cmd = "Start-Sleep -Seconds 2; & '$escaped'; Remove-Item -LiteralPath '$escaped' -Force -ErrorAction SilentlyContinue"
-    Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd) -WindowStyle Normal | Out-Null
+    Start-Process powershell.exe `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installerPath) `
+        -WorkingDirectory $env:TEMP `
+        -WindowStyle Normal | Out-Null
 }
 
 function Test-InstallerUpdate {
