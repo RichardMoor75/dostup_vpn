@@ -1407,10 +1407,21 @@ function Save-Settings($s) {
 }
 
 function Start-InstallerUpdateProcess($installerPath) {
+    try {
+        # Windows PowerShell misreads UTF-8 without BOM from -File on self-update.
+        # Re-save the downloaded installer with BOM before launching it.
+        $scriptText = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($installerPath))
+        [System.IO.File]::WriteAllText($installerPath, $scriptText, (New-Object System.Text.UTF8Encoding($true)))
+    } catch {
+        Write-Fail "Не удалось подготовить обновление: $_"
+        return $false
+    }
+
     Start-Process powershell.exe `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installerPath) `
         -WorkingDirectory $env:TEMP `
         -WindowStyle Normal | Out-Null
+    return $true
 }
 
 function Test-InstallerUpdate {
@@ -1453,8 +1464,9 @@ function Test-InstallerUpdate {
             $choice = Read-Host '  Обновить сейчас? (y/N)'
             if ($choice -eq 'y' -or $choice -eq 'Y') {
                 Write-Step 'Обновление...'
-                Start-InstallerUpdateProcess $tmpFile
-                exit
+                if (Start-InstallerUpdateProcess $tmpFile) {
+                    exit
+                }
             }
         }
         Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
