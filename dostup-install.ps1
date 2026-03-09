@@ -29,6 +29,49 @@ function Write-OK($text) { Write-Host "[OK] $text" -ForegroundColor Green }
 function Write-Fail($text) { Write-Host "[FAIL] $text" -ForegroundColor Red }
 function Write-Info($text) { Write-Host "[i] $text" -ForegroundColor Blue }
 
+function Get-TempDirectory {
+    $candidates = @()
+
+    foreach ($name in @('TEMP', 'TMP')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $candidates += @{ Path = $value; AllowCreate = $false }
+        }
+    }
+
+    $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+    if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
+        $candidates += @{ Path = (Join-Path $localAppData 'Temp'); AllowCreate = $true }
+    }
+
+    try {
+        $pathTemp = [System.IO.Path]::GetTempPath()
+        if (-not [string]::IsNullOrWhiteSpace($pathTemp)) {
+            $candidates += @{ Path = $pathTemp; AllowCreate = $false }
+        }
+    } catch { }
+
+    $candidates += @{ Path = (Join-Path $DOSTUP_DIR 'tmp'); AllowCreate = $true }
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate.Path)) { continue }
+        try {
+            $fullPath = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($candidate.Path))
+            if (-not (Test-Path -LiteralPath $fullPath)) {
+                if (-not $candidate.AllowCreate) { continue }
+                [System.IO.Directory]::CreateDirectory($fullPath) | Out-Null
+            }
+            if (Test-Path -LiteralPath $fullPath) {
+                return $fullPath
+            }
+        } catch { }
+    }
+
+    throw 'Failed to resolve temp directory'
+}
+
+$TEMP_DIR = Get-TempDirectory
+
 # PS 7.4+ removed Get-WmiObject; use Get-CimInstance when available
 function Get-Win32Process($filter) {
     if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
@@ -59,7 +102,7 @@ function Test-WscriptAvailable {
         } catch { }
     }
 
-    $tmpVbs = Join-Path $env:TEMP ("dostup-wscript-test-{0}.vbs" -f $PID)
+    $tmpVbs = Join-Path $TEMP_DIR ("dostup-wscript-test-{0}.vbs" -f $PID)
     try {
         [System.IO.File]::WriteAllText($tmpVbs, 'WScript.Quit 0', [System.Text.Encoding]::ASCII)
         $proc = Start-Process -FilePath $wscriptPath -ArgumentList "`"$tmpVbs`"" -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
@@ -67,7 +110,7 @@ function Test-WscriptAvailable {
     } catch {
         return $false
     } finally {
-        Remove-Item $tmpVbs -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpVbs -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -346,10 +389,10 @@ function Get-FileSHA256($path) {
 }
 
 function Get-InstallerHash($fallbackHash = '') {
-    $tmpHash = "$env:TEMP\dostup-installer-hash.ps1"
+    $tmpHash = Join-Path $TEMP_DIR ("dostup-installer-hash-{0}.ps1" -f $PID)
     try {
         if (Invoke-DownloadWithRetry 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1' $tmpHash 3) {
-            if ((Test-Path $tmpHash) -and ((Get-Item $tmpHash).Length -gt 0)) {
+            if ((Test-Path -LiteralPath $tmpHash) -and ((Get-Item -LiteralPath $tmpHash).Length -gt 0)) {
                 $sha = [System.Security.Cryptography.SHA256]::Create()
                 try {
                     $rawBytes = [System.IO.File]::ReadAllBytes($tmpHash)
@@ -362,7 +405,7 @@ function Get-InstallerHash($fallbackHash = '') {
             }
         }
     } catch { }
-    Remove-Item $tmpHash -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tmpHash -Force -ErrorAction SilentlyContinue
     return $fallbackHash
 }
 
@@ -939,6 +982,49 @@ function Write-OK($t) { Write-Host "[OK] $t" -ForegroundColor Green }
 function Write-Fail($t) { Write-Host "[FAIL] $t" -ForegroundColor Red }
 function Write-Info($t) { Write-Host "[i] $t" -ForegroundColor Blue }
 
+function Get-TempDirectory {
+    $candidates = @()
+
+    foreach ($name in @('TEMP', 'TMP')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $candidates += @{ Path = $value; AllowCreate = $false }
+        }
+    }
+
+    $localAppData = [Environment]::GetFolderPath('LocalApplicationData')
+    if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
+        $candidates += @{ Path = (Join-Path $localAppData 'Temp'); AllowCreate = $true }
+    }
+
+    try {
+        $pathTemp = [System.IO.Path]::GetTempPath()
+        if (-not [string]::IsNullOrWhiteSpace($pathTemp)) {
+            $candidates += @{ Path = $pathTemp; AllowCreate = $false }
+        }
+    } catch { }
+
+    $candidates += @{ Path = (Join-Path $DOSTUP_DIR 'tmp'); AllowCreate = $true }
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate.Path)) { continue }
+        try {
+            $fullPath = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($candidate.Path))
+            if (-not (Test-Path -LiteralPath $fullPath)) {
+                if (-not $candidate.AllowCreate) { continue }
+                [System.IO.Directory]::CreateDirectory($fullPath) | Out-Null
+            }
+            if (Test-Path -LiteralPath $fullPath) {
+                return $fullPath
+            }
+        } catch { }
+    }
+
+    throw 'Failed to resolve temp directory'
+}
+
+$TEMP_DIR = Get-TempDirectory
+
 function Get-Win32Process($filter) {
     if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
         Get-CimInstance Win32_Process -Filter $filter -ErrorAction SilentlyContinue
@@ -968,7 +1054,7 @@ function Test-WscriptAvailable {
         } catch { }
     }
 
-    $tmpVbs = Join-Path $env:TEMP ("dostup-wscript-test-{0}.vbs" -f $PID)
+    $tmpVbs = Join-Path $TEMP_DIR ("dostup-wscript-test-{0}.vbs" -f $PID)
     try {
         [System.IO.File]::WriteAllText($tmpVbs, 'WScript.Quit 0', [System.Text.Encoding]::ASCII)
         $proc = Start-Process -FilePath $wscriptPath -ArgumentList "`"$tmpVbs`"" -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
@@ -976,7 +1062,7 @@ function Test-WscriptAvailable {
     } catch {
         return $false
     } finally {
-        Remove-Item $tmpVbs -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpVbs -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -1419,7 +1505,7 @@ function Start-InstallerUpdateProcess($installerPath) {
 
     Start-Process powershell.exe `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installerPath) `
-        -WorkingDirectory $env:TEMP `
+        -WorkingDirectory $TEMP_DIR `
         -WindowStyle Normal | Out-Null
     return $true
 }
@@ -1431,21 +1517,21 @@ function Test-InstallerUpdate {
 
         $url = 'https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.ps1'
         # Скачиваем в файл чтобы хешировать сырые байты (без encoding-преобразований)
-        $tmpFile = "$env:TEMP\dostup-installer-check.ps1"
-        if (-not (Invoke-DownloadWithRetry $url $tmpFile) -or -not (Test-Path $tmpFile)) { return }
+        $tmpFile = Join-Path $TEMP_DIR ("dostup-installer-check-{0}.ps1" -f $PID)
+        if (-not (Invoke-DownloadWithRetry $url $tmpFile) -or -not (Test-Path -LiteralPath $tmpFile)) { return }
 
         # Validate downloaded file before comparing hash
-        $fileSize = (Get-Item $tmpFile).Length
+        $fileSize = (Get-Item -LiteralPath $tmpFile).Length
         if ($fileSize -lt 10240) {
             # Installer must be >10KB — likely a corrupt/partial download or error page
-            Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
             return
         }
-        $fileHead = Get-Content $tmpFile -TotalCount 3 -ErrorAction SilentlyContinue
+        $fileHead = Get-Content -LiteralPath $tmpFile -TotalCount 3 -ErrorAction SilentlyContinue
         $headText = ($fileHead -join "`n")
         if ($headText -notmatch 'Dostup.*Installer|Mihomo') {
             # File doesn't look like our installer — could be HTML error page or tampered
-            Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
             return
         }
 
@@ -1456,7 +1542,7 @@ function Test-InstallerUpdate {
         if ($newHash -ne $s.installer_hash) {
             if ($env:DOSTUP_SILENT -eq '1') {
                 Write-Output 'DOSTUP_SCRIPT_UPDATE'
-                Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
                 return
             }
             Write-Host ''
@@ -1469,7 +1555,7 @@ function Test-InstallerUpdate {
                 }
             }
         }
-        Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
     } catch {}
 }
 
