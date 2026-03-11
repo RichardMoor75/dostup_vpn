@@ -201,6 +201,7 @@ find_free_port() {
 # Удаляет: external-ui, tun, rule-providers, RULE-SET правила
 # Оставляет: external-controller (для API — update-providers, healthcheck)
 # Меняет: DNS listen на 127.0.0.1:1053
+# Меняет: MATCH на Auto Select
 # Проверяет: свободность порта mixed-port
 # Результат в глобальной переменной PROXY_PORT
 process_config() {
@@ -216,23 +217,11 @@ process_config() {
     # 3. Удаление блока rule-providers:
     awk 'BEGIN{s=0} /^rule-providers:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
 
-    # 3.1. Инжект кастомного rule-provider proxy-rules
-    cat >> "$temp" << 'RULEPROVIDERS'
-
-rule-providers:
-  proxy-rules:
-    type: http
-    behavior: classical
-    url: https://files.richard-moor.ru/admin/proxy.yml
-    path: ./proxy-rules.yaml
-    interval: 86400
-RULEPROVIDERS
-
     # 4. Удаление всех правил RULE-SET из rules:
     sed -i '/RULE-SET/d' "$temp"
 
-    # 4.1. Инжект правила RULE-SET,proxy-rules перед MATCH
-    sed -i '/- MATCH/i\  - RULE-SET,proxy-rules,Auto Select' "$temp"
+    # 4.1. Финальное правило всегда направляем в Auto Select
+    sed -i -E 's/^([[:space:]]*)- MATCH,.*/\1- MATCH,Auto Select/' "$temp"
 
     # 5. Замена DNS listen: 0.0.0.0:53 → 127.0.0.1:1053
     sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
@@ -588,22 +577,10 @@ process_config() {
     awk 'BEGIN{s=0} /^tun:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
     awk 'BEGIN{s=0} /^rule-providers:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
 
-    # Инжект кастомного rule-provider proxy-rules
-    cat >> "$temp" << 'RULEPROVIDERS'
-
-rule-providers:
-  proxy-rules:
-    type: http
-    behavior: classical
-    url: https://files.richard-moor.ru/admin/proxy.yml
-    path: ./proxy-rules.yaml
-    interval: 86400
-RULEPROVIDERS
-
     sed -i '/RULE-SET/d' "$temp"
 
-    # Инжект правила RULE-SET,proxy-rules перед MATCH
-    sed -i '/- MATCH/i\  - RULE-SET,proxy-rules,Auto Select' "$temp"
+    # Финальное правило всегда направляем в Auto Select
+    sed -i -E 's/^([[:space:]]*)- MATCH,.*/\1- MATCH,Auto Select/' "$temp"
 
     sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
 
