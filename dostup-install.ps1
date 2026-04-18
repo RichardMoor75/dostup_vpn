@@ -195,6 +195,22 @@ function Test-ValidYaml($path) {
     }
 }
 
+# Безопасный bind: external-controller только на loopback.
+# Меняет 'external-controller: 0.0.0.0:PORT' (любые кавычки) на '127.0.0.1:PORT'.
+# При любой ошибке оригинал остаётся нетронутым.
+function Protect-ConfigBindings($path) {
+    try {
+        if (-not (Test-Path $path)) { return }
+        $c = Get-Content $path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrEmpty($c)) { return }
+        $pattern = '(?m)^(external-controller:\s*)[''"]?0\.0\.0\.0:(\d+)[''"]?(.*)$'
+        $new = [regex]::Replace($c, $pattern, '$1''127.0.0.1:$2''$3')
+        if ([string]::IsNullOrEmpty($new)) { return }
+        if ($new -eq $c) { return }
+        [System.IO.File]::WriteAllText($path, $new, (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+
 function Get-MixedPort {
     $port = 2080
     if (Test-Path $CONFIG_FILE) {
@@ -798,6 +814,7 @@ if (-not (Test-ValidYaml $tempConfig)) {
 }
 
 Move-Item $tempConfig $CONFIG_FILE -Force
+Protect-ConfigBindings $CONFIG_FILE
 Write-OK 'Config downloaded and verified'
 
 # Remove TUN block for older Windows (7/8/8.1) - TUN driver requires Win 10+
@@ -1175,6 +1192,20 @@ function Test-ValidYaml($path) {
         if ($c -match '(?i)<!DOCTYPE|<html|<head') { return $false }
         return ($c -match '^\s*[\w-]+\s*:' -or $c -match '^\s*-\s+')
     } catch { return $false }
+}
+
+# Безопасный bind: external-controller только на loopback
+function Protect-ConfigBindings($path) {
+    try {
+        if (-not (Test-Path $path)) { return }
+        $c = Get-Content $path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrEmpty($c)) { return }
+        $pattern = '(?m)^(external-controller:\s*)[''"]?0\.0\.0\.0:(\d+)[''"]?(.*)$'
+        $new = [regex]::Replace($c, $pattern, '$1''127.0.0.1:$2''$3')
+        if ([string]::IsNullOrEmpty($new)) { return }
+        if ($new -eq $c) { return }
+        [System.IO.File]::WriteAllText($path, $new, (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
 }
 
 function Expand-ZipFile($zipPath, $destPath) {
@@ -1615,6 +1646,7 @@ function Start-Mihomo {
     if (Invoke-DownloadWithRetry $settings.subscription_url $tempCfg) {
         if (Test-ValidYaml $tempCfg) {
             Move-Item $tempCfg $CONFIG_FILE -Force
+            Protect-ConfigBindings $CONFIG_FILE
             # Remove TUN block for older Windows
             $osVer = [Environment]::OSVersion.Version
             if ($osVer.Major -lt 10) {

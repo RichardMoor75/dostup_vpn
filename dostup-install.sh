@@ -226,6 +226,9 @@ process_config() {
     # 5. Замена DNS listen: 0.0.0.0:53 → 127.0.0.1:1053
     sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
 
+    # 5.1. Безопасный bind: external-controller только на loopback
+    sed -i -E "s/^(external-controller:[[:space:]]*)['\"]?0\.0\.0\.0:([0-9]+)['\"]?(.*)$/\1'127.0.0.1:\2'\3/" "$temp"
+
     # 6. Принудительная установка mixed-port: 7890 (если свободен)
     local port desired_port=7890
     port=$(grep -oP 'mixed-port:\s*\K\d+' "$temp" 2>/dev/null || echo "7890")
@@ -583,6 +586,9 @@ process_config() {
     sed -i -E 's/^([[:space:]]*)- MATCH,.*/\1- MATCH,Auto Select/' "$temp"
 
     sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
+
+    # Безопасный bind: external-controller только на loopback
+    sed -i -E "s/^(external-controller:[[:space:]]*)['\"]?0\.0\.0\.0:([0-9]+)['\"]?(.*)$/\1'127.0.0.1:\2'\3/" "$temp"
 
     local port desired_port=7890
     port=$(grep -oP 'mixed-port:\s*\K\d+' "$temp" 2>/dev/null || echo "7890")

@@ -324,6 +324,21 @@ download_with_retry() {
     return 1
 }
 
+# Безопасный bind: external-controller только на loopback.
+# Меняет 'external-controller: 0.0.0.0:PORT' (любые кавычки) на '127.0.0.1:PORT'.
+# При любой ошибке или невалидном результате оригинал сохраняется.
+secure_config() {
+    local f="$1" tmp="${1}.sec"
+    if sed -E "s/^(external-controller:[[:space:]]*)['\"]?0\.0\.0\.0:([0-9]+)['\"]?(.*)$/\1'127.0.0.1:\2'\3/" "$f" > "$tmp" 2>/dev/null; then
+        if [[ -s "$tmp" ]] && validate_yaml "$tmp"; then
+            mv "$tmp" "$f"
+            return 0
+        fi
+    fi
+    rm -f "$tmp"
+    return 0
+}
+
 # Бэкап конфига
 backup_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -410,6 +425,9 @@ download_config() {
         restore_config
         return 1
     fi
+
+    # Безопасный bind для external-controller (0.0.0.0 → 127.0.0.1)
+    secure_config "$temp_config"
 
     # Всё ок, заменяем конфиг
     mv "$temp_config" "$CONFIG_FILE"
@@ -679,6 +697,19 @@ validate_yaml() {
     ! echo "$content" | grep -qiE '<!DOCTYPE|<html|<head' && echo "$content" | grep -qE '^[a-zA-Z_-]+:|^\s*-\s+'
 }
 
+# Безопасный bind: external-controller только на loopback
+secure_config() {
+    local f="$1" tmp="${1}.sec"
+    if sed -E "s/^(external-controller:[[:space:]]*)['\"]?0\.0\.0\.0:([0-9]+)['\"]?(.*)$/\1'127.0.0.1:\2'\3/" "$f" > "$tmp" 2>/dev/null; then
+        if [[ -s "$tmp" ]] && validate_yaml "$tmp"; then
+            mv "$tmp" "$f"
+            return 0
+        fi
+    fi
+    rm -f "$tmp"
+    return 0
+}
+
 # --- API-функции (парсинг JSON через osascript, без python3) ---
 
 get_proxy_providers() {
@@ -936,6 +967,7 @@ do_update_config() {
         temp_config="${CONFIG_FILE}.tmp"
         if download_with_retry "$sub_url" "$temp_config"; then
             if validate_yaml "$temp_config"; then
+                secure_config "$temp_config"
                 mv "$temp_config" "$CONFIG_FILE"
                 echo -e "${GREEN}✓ Конфиг обновлён${NC}"
             else

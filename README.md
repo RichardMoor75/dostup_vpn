@@ -34,6 +34,7 @@ wget -O dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup
 - Скачивает подходящую версию ядра Mihomo с GitHub (compatible-билд для старых CPU без AVX2)
 - Запрашивает URL подписки (конфига) через GUI-диалог (на Linux — терминал)
 - Скачивает и валидирует конфиг (проверка YAML)
+- Защищает API управления: `external-controller` принудительно привязывается к `127.0.0.1` (если в подписке был `0.0.0.0` — переписывается, чтобы API не был доступен извне)
 - Скачивает geo-базы (geoip.dat, geosite.dat)
 - Создаёт иконку управления VPN (macOS — menu bar, Windows — системный трей, Linux — CLI `dostup`)
 - macOS menu bar: при наличии рабочего `swiftc` собирает локально (через `xcrun swiftc`), при ошибке/отсутствии — скачивает готовый бинарник
