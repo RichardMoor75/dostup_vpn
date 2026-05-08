@@ -655,10 +655,11 @@ check_script_update() {
     [[ -z "$current_hash" ]] && return 0
 
     local url="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh"
-    local tmp="/tmp/dostup-installer-check"
+    # Уникальное имя по pid, чтобы параллельные запуски не топтали друг друга.
+    local tmp="/tmp/dostup-installer-check.$$"
     if curl -sL -4 --connect-timeout 10 --max-time 30 "$url" -o "$tmp" 2>/dev/null; then
         local new_hash
-        new_hash=$(sha256sum "$tmp" | cut -d' ' -f1)
+        new_hash=$(sha256sum "$tmp" 2>/dev/null | cut -d' ' -f1)
         if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
             echo ""
             echo -e "${YELLOW}▶ Доступно обновление скрипта управления${NC}"
@@ -667,11 +668,12 @@ check_script_update() {
             if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
                 echo -e "${YELLOW}▶ Обновление...${NC}"
                 sudo bash "$tmp"
+                rm -f "$tmp"
                 exit 0
             fi
         fi
-        rm -f "$tmp"
     fi
+    rm -f "$tmp"
 }
 
 do_update() {
@@ -847,7 +849,7 @@ do_check() {
 }
 
 do_log() {
-    journalctl -u dostup -f
+    journalctl -u dostup -n 50 -f
 }
 
 do_uninstall() {
