@@ -81,13 +81,19 @@ check_os() {
 }
 
 # --- Проверка интернета ---
+# Пробуем несколько хостов с -4, чтобы не упасть, если конкретно github.com
+# заблокирован/тормозит у юзера (а ставит он именно из-за блокировок).
 check_internet() {
     print_step "Проверка подключения к интернету..."
-    if ! curl -s --head --connect-timeout 5 https://github.com > /dev/null 2>&1; then
-        print_error "Нет подключения к интернету"
-        exit 1
-    fi
-    print_success "Интернет доступен"
+    local host
+    for host in https://1.1.1.1 https://api.github.com https://raw.githubusercontent.com; do
+        if curl -s -4 --head --connect-timeout 5 --max-time 10 "$host" > /dev/null 2>&1; then
+            print_success "Интернет доступен"
+            return 0
+        fi
+    done
+    print_error "Нет подключения к интернету"
+    exit 1
 }
 
 # --- Определение архитектуры ---
@@ -134,7 +140,7 @@ download_with_retry() {
     local retry=0
 
     while [[ $retry -lt $max_retries ]]; do
-        if curl -fL --connect-timeout 10 --max-time 120 -s -o "$output" "$url" 2>/dev/null; then
+        if curl -fL -4 --connect-timeout 10 --max-time 120 -s -o "$output" "$url" 2>/dev/null; then
             if [[ -s "$output" ]]; then
                 return 0
             fi
@@ -251,7 +257,7 @@ process_config() {
 
 # --- Получение последней версии mihomo ---
 get_latest_version() {
-    curl -s "$MIHOMO_RELEASES_API" | jq -r '.tag_name'
+    curl -s -4 --connect-timeout 10 --max-time 30 "$MIHOMO_RELEASES_API" | jq -r '.tag_name'
 }
 
 # --- Управление settings.json (через jq) ---
@@ -515,7 +521,7 @@ download_with_retry() {
     local output="$2"
     local retry=0
     while [[ $retry -lt 3 ]]; do
-        if curl -fL --connect-timeout 10 --max-time 120 -s -o "$output" "$url" 2>/dev/null && [[ -s "$output" ]]; then
+        if curl -fL -4 --connect-timeout 10 --max-time 120 -s -o "$output" "$url" 2>/dev/null && [[ -s "$output" ]]; then
             return 0
         fi
         retry=$((retry + 1))
@@ -650,7 +656,7 @@ check_script_update() {
 
     local url="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh"
     local tmp="/tmp/dostup-installer-check"
-    if curl -sL --max-time 10 "$url" -o "$tmp" 2>/dev/null; then
+    if curl -sL -4 --connect-timeout 10 --max-time 30 "$url" -o "$tmp" 2>/dev/null; then
         local new_hash
         new_hash=$(sha256sum "$tmp" | cut -d' ' -f1)
         if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
@@ -680,7 +686,7 @@ do_update() {
     local current_version
     current_version=$(read_settings "installed_version")
     local latest_version
-    latest_version=$(curl -s "$MIHOMO_RELEASES_API" | jq -r '.tag_name' 2>/dev/null)
+    latest_version=$(curl -s -4 --connect-timeout 10 --max-time 30 "$MIHOMO_RELEASES_API" | jq -r '.tag_name' 2>/dev/null)
 
     if [[ -n "$latest_version" && "$latest_version" != "null" && "$current_version" != "$latest_version" ]]; then
         print_step "Обновление ядра: $current_version → $latest_version"
@@ -1142,8 +1148,18 @@ install_service
 # Установка CLI-обёртки
 install_cli
 
-# Save installer hash for self-update
-installer_hash=$(curl -sL --max-time 10 "https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh" | sha256sum | cut -d' ' -f1)
+# Save installer hash for self-update.
+# Сначала пробуем локально — это быстрее и работает даже если GitHub лёг.
+# Fallback на сеть для случая `bash <(curl ...)`, когда $0 = /dev/fd/N.
+installer_hash=""
+if [[ -f "$0" && -r "$0" ]]; then
+    installer_hash=$(sha256sum "$0" 2>/dev/null | cut -d' ' -f1)
+    [[ "$installer_hash" =~ ^[a-f0-9]{64}$ ]] || installer_hash=""
+fi
+if [[ -z "$installer_hash" ]]; then
+    installer_hash=$(curl -sL -4 --connect-timeout 10 --max-time 30 "https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh" 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [[ "$installer_hash" =~ ^[a-f0-9]{64}$ ]] || installer_hash=""
+fi
 if [[ -n "$installer_hash" ]]; then
     update_settings "installer_hash" "$installer_hash"
 fi
