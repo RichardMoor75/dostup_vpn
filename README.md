@@ -25,7 +25,7 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 Скачай и запусти:
 
 ```bash
-wget -O dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh && sudo bash dostup-install.sh
+curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh && sudo bash dostup-install.sh
 ```
 
 ## Что делает установщик

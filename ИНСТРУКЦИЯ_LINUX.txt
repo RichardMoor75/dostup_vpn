@@ -9,7 +9,7 @@
 
 ШАГ 2: Скачайте установочный скрипт
 
-   wget -O dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh
+   curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh
 
 ШАГ 3: Запустите установку
 
