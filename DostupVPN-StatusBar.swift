@@ -2,7 +2,7 @@ import Cocoa
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDelegate {
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
@@ -11,7 +11,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var updateProvidersMenuItem: NSMenuItem!
     private var healthcheckMenuItem: NSMenuItem!
     private var checkMenuItem: NSMenuItem!
+    private var updateScriptMenuItem: NSMenuItem!
     private var timer: Timer?
+
+    // Пока идёт перезапуск, таймер не трогает заголовок статуса —
+    // иначе через 5 секунд «Перезапуск...» сменяется на «VPN остановлен»
+    // и пользователь считает, что перезапуск не сработал.
+    private var isRestarting = false
 
     private var colorIcon: NSImage?
     private var grayIcon: NSImage?
@@ -19,6 +25,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
     private var controlScript: String {
         return homeDir + "/dostup/Dostup_VPN.command"
+    }
+    // Флаг наличия обновления ставит планировщик (control script)
+    private var scriptUpdateFlag: String {
+        return homeDir + "/dostup/.script-update"
+    }
+    // Очередь уведомлений от фоновых bash-задач
+    private var notifyFile: String {
+        return homeDir + "/dostup/.notify"
     }
 
     // MARK: - Application Lifecycle
@@ -28,6 +42,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let appIcon = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png") {
             NSApplication.shared.applicationIconImage = appIcon
         }
+        // Без делегата клики по уведомлениям никуда не приходят
+        NSUserNotificationCenter.default.delegate = self
         loadIcons()
         setupStatusItem()
         setupMenu()
@@ -106,6 +122,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // Update script (виден только когда планировщик нашёл обновление)
+        updateScriptMenuItem = NSMenuItem(title: "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} \u{0441}\u{043A}\u{0440}\u{0438}\u{043F}\u{0442}", action: #selector(updateScript), keyEquivalent: "")
+        updateScriptMenuItem.target = self
+        updateScriptMenuItem.isHidden = true
+        menu.addItem(updateScriptMenuItem)
+
         // Exit
         let exitMenuItem = NSMenuItem(title: "\u{0412}\u{044B}\u{0445}\u{043E}\u{0434}", action: #selector(exitApp), keyEquivalent: "q")
         exitMenuItem.target = self
@@ -136,6 +158,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        drainPendingNotifications()
+        updateScriptMenuItem.isHidden = !FileManager.default.fileExists(atPath: scriptUpdateFlag)
+
+        // Во время перезапуска состоянием меню управляет restartVPN()
+        if isRestarting { return }
+
         // Update menu items
         restartMenuItem.isEnabled = running
         updateProvidersMenuItem.isEnabled = running
@@ -148,6 +176,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenuItem.title = "\u{25CB} VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}"
             toggleMenuItem.title = "\u{0417}\u{0430}\u{043F}\u{0443}\u{0441}\u{0442}\u{0438}\u{0442}\u{044C} VPN"
         }
+    }
+
+    // MARK: - Pending Notifications
+
+    // Фоновые задачи (планировщик ru.dostup.vpn.updater) складывают текст сюда,
+    // чтобы уведомление ушло от приложения — с иконкой и в едином стиле.
+    private func drainPendingNotifications() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: notifyFile) else { return }
+        let content = (try? String(contentsOfFile: notifyFile, encoding: .utf8)) ?? ""
+        try? fm.removeItem(atPath: notifyFile)
+
+        var actionable = false
+        var texts: [String] = []
+        for raw in content.split(separator: "\n") {
+            let line = String(raw).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if line.hasPrefix("@ACTION@") {
+                actionable = true
+                texts.append(String(line.dropFirst(8)))
+            } else {
+                texts.append(line)
+            }
+        }
+        guard !texts.isEmpty else { return }
+        showNotification(title: "Dostup VPN",
+                         text: texts.joined(separator: "\n"),
+                         actionable: actionable)
     }
 
     // MARK: - Process Check
@@ -235,86 +291,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restartVPN() {
+        isRestarting = true
         restartMenuItem.isEnabled = false
+        updateProvidersMenuItem.isEnabled = false
         statusMenuItem.title = "\u{21BB} \u{041F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0441}\u{043A}..."
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = [self.controlScript, "restart-silent"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            try? process.run()
-            process.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let output = self.runControlScript("restart-silent")
             let text = output.isEmpty ? "VPN \u{043F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}" : output
 
             DispatchQueue.main.async {
+                self.isRestarting = false
                 self.showNotification(title: "Dostup VPN", text: text)
                 self.updateStatus()
-                self.restartMenuItem.isEnabled = self.isMihomoRunning()
             }
         }
     }
 
     @objc private func updateProviders() {
+        updateProvidersMenuItem.isEnabled = false
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let api = "http://127.0.0.1:9090"
-            var allOk = true
-            let semaphore = DispatchSemaphore(value: 0)
-
-            // Update proxy providers dynamically
-            if let url = URL(string: "\(api)/providers/proxies"),
-               let data = try? Data(contentsOf: url),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let providers = json["providers"] as? [String: Any] {
-                for name in providers.keys where name != "default" {
-                    let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
-                    var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)")!)
-                    request.httpMethod = "PUT"
-                    request.timeoutInterval = 15
-                    URLSession.shared.dataTask(with: request) { _, response, _ in
-                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
-                            allOk = false
-                        }
-                        semaphore.signal()
-                    }.resume()
-                    semaphore.wait()
-                }
-            } else {
-                allOk = false
-            }
-
-            // Update rule providers dynamically
-            if let url = URL(string: "\(api)/providers/rules"),
-               let data = try? Data(contentsOf: url),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let providers = json["providers"] as? [String: Any] {
-                for name in providers.keys {
-                    let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
-                    var request = URLRequest(url: URL(string: "\(api)/providers/rules/\(encoded)")!)
-                    request.httpMethod = "PUT"
-                    request.timeoutInterval = 15
-                    URLSession.shared.dataTask(with: request) { _, response, _ in
-                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
-                            allOk = false
-                        }
-                        semaphore.signal()
-                    }.resume()
-                    semaphore.wait()
-                }
-            }
-
+            guard let self = self else { return }
+            // Профиль по ссылке подписки + провайдеры прокси и правил.
+            // Логика целиком в control script: её можно менять без пересборки бинарника.
+            let output = self.runControlScript("update-profile-silent")
+            let text = output.isEmpty ? "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{0438}\u{0435} \u{0437}\u{0430}\u{0432}\u{0435}\u{0440}\u{0448}\u{0435}\u{043D}\u{043E}" : output
             DispatchQueue.main.async {
-                self?.showNotification(
-                    title: "Dostup VPN",
-                    text: allOk ? "\u{041F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{044B} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{044B}" : "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{0438}\u{044F} \u{043F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{043E}\u{0432}"
-                )
+                self.showNotification(title: "Dostup VPN", text: text)
+                self.updateStatus()
             }
         }
     }
@@ -385,6 +390,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         runInTerminal(argument: "check")
     }
 
+    // Установщику нужны пароль и ответы пользователя — только в Терминале
+    @objc private func updateScript() {
+        runInTerminal(argument: "self-update")
+    }
+
     @objc private func exitApp() {
         let running = isMihomoRunning()
         if !running {
@@ -408,6 +418,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Helpers
+
+    // Синхронный вызов control script с чтением stdout.
+    // Читаем ДО waitUntilExit: иначе при выводе больше размера буфера пайпа
+    // дочерний процесс заблокируется на записи, а мы — в ожидании его выхода.
+    private func runControlScript(_ argument: String) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [controlScript, argument]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return ""
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
 
     private func runInTerminal(argument: String) {
         // Используем временный .command файл вместо AppleScript automation Terminal
@@ -434,12 +465,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Notifications
 
-    private func showNotification(title: String, text: String) {
+    private func showNotification(title: String, text: String, actionable: Bool = false) {
         let notification = NSUserNotification()
         notification.title = title
         notification.informativeText = text
         notification.contentImage = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png")
+        if actionable {
+            notification.hasActionButton = true
+            notification.actionButtonTitle = "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C}"
+            notification.userInfo = ["action": "self-update"]
+        }
         NSUserNotificationCenter.default.deliver(notification)
+    }
+
+    // Приложение живёт в статусбаре и формально почти всегда «активно» —
+    // без этого системa решит не показывать уведомление.
+    func userNotificationCenter(_ center: NSUserNotificationCenter,
+                                shouldPresent notification: NSUserNotification) -> Bool {
+        return true
+    }
+
+    func userNotificationCenter(_ center: NSUserNotificationCenter,
+                                didActivate notification: NSUserNotification) {
+        guard let action = notification.userInfo?["action"] as? String else { return }
+        // Кнопка действия видна только в стиле «Предупреждения»; в «Баннерах»
+        // работает клик по телу уведомления — обрабатываем оба случая.
+        switch notification.activationType {
+        case .actionButtonClicked, .contentsClicked:
+            runInTerminal(argument: action)
+        default:
+            break
+        }
     }
 }
 

@@ -9,7 +9,7 @@
 Открой Terminal и вставь:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command | bash
+curl -fsSL --connect-timeout 10 https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command | bash
 ```
 
 ### Windows
@@ -51,7 +51,8 @@ curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubuserco
 
 - Цветная иконка (зелёный кот) — VPN работает, серая — остановлен
 - Запуск / остановка VPN одним кликом (без запроса пароля)
-- Перезапуск, обновление прокси и правил, проверка нод (healthcheck), проверка доступа
+- Перезапуск, обновление профиля и провайдеров, проверка нод (healthcheck), проверка доступа
+- «Обновить скрипт» — появляется только когда вышла новая версия
 - «Выход» — остановка VPN и закрытие иконки
 - Автозапуск при входе в систему (LaunchAgent) и при старте VPN из приложения
 
@@ -75,8 +76,8 @@ curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubuserco
 Приложение **Dostup_VPN** (macOS — Spotlight/Launchpad, Windows — ярлык на рабочем столе) или команда `dostup` (Linux). Запусти для:
 
 - Остановки VPN
-- Перезапуска VPN (с обновлением конфига и ядра)
-- Обновления провайдеров прокси и правил
+- Перезапуска VPN
+- Обновления профиля и провайдеров прокси/правил
 - Проверки нод (healthcheck — какие прокси живые)
 - Проверки доступа к заблокированным ресурсам
 
@@ -84,11 +85,24 @@ curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubuserco
 
 На Linux при каждом обновлении конфига автоматически добавляется кастомный rule-provider `proxy-rules` (правила маршрутизации с сервера) и соответствующее правило `RULE-SET` перед `MATCH`.
 
-При каждом запуске автоматически проверяются обновления:
-- Скрипт управления (сравнение SHA256 с версией на GitHub)
-- Ядро Mihomo (при наличии новой версии)
-- Конфиг (скачивается заново)
-- Geo-базы (раз в 2 недели)
+## Обновления
+
+### macOS — фоновый планировщик
+
+Отдельный LaunchAgent `ru.dostup.vpn.updater` раз в 6 часов проверяет:
+
+- **Профиль** — скачивается по ссылке подписки. Если содержимое не изменилось, ничего не делается. Если изменилось — применяется на лету через API mihomo, **без перезапуска и без разрыва соединения**
+- **Ядро Mihomo** — новая версия скачивается рядом с работающей (`mihomo.new`) и подменяется при следующем запуске: перезаписать выполняющийся файл нельзя
+- **Geo-базы** — раз в 2 недели
+- **Сам скрипт** — сравнение SHA256 с версией на GitHub. При наличии обновления в меню иконки появляется пункт «Обновить скрипт» и приходит уведомление, по клику на которое открывается установщик
+
+Планировщик работает от пользователя и **не требует прав администратора**. Лог: `~/dostup/logs/updater.log`. Форсировать прогон: `launchctl start ru.dostup.vpn.updater`.
+
+Запуск и перезапуск VPN при этом ничего не качают и занимают несколько секунд независимо от состояния канала.
+
+### Windows и Linux
+
+Обновления проверяются при каждом запуске: скрипт управления, ядро Mihomo, конфиг, geo-базы (раз в 2 недели).
 
 ## Панель управления
 
@@ -124,6 +138,7 @@ curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubuserco
 /opt/dostup/                 # Linux
 
 ├── mihomo                   # Ядро (mihomo.exe на Windows)
+├── mihomo.new               # Скачанное обновление ядра (macOS, до подмены при перезапуске)
 ├── config.yaml              # Конфиг из подписки
 ├── geoip.dat                # База IP-адресов
 ├── geosite.dat              # База доменов
@@ -145,7 +160,13 @@ curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubuserco
 │   └── icon_off.png         # Серая иконка (VPN остановлен)
 └── logs/
     ├── mihomo.log           # Логи Mihomo
+    ├── updater.log          # Лог планового обновления (macOS)
     └── statusbar-build.log  # Лог сборки menu bar app (macOS, если была попытка компиляции)
+
+# macOS, служебные файлы планировщика:
+~/dostup/.script-update      # Флаг: вышла новая версия скрипта
+~/dostup/.notify             # Очередь уведомлений для иконки в строке меню
+~/dostup/.lock               # Блокировка: не даёт обновлению и перезапуску наложиться
 
 # Linux дополнительно:
 /etc/systemd/system/dostup.service   # systemd-сервис
@@ -175,9 +196,11 @@ curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubuserco
 
 ### macOS
 ```bash
-# Остановить menu bar app и LaunchAgent
+# Остановить menu bar app, планировщик обновлений и их LaunchAgent'ы
 launchctl unload ~/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist 2>/dev/null
+launchctl unload ~/Library/LaunchAgents/ru.dostup.vpn.updater.plist 2>/dev/null
 rm -f ~/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist
+rm -f ~/Library/LaunchAgents/ru.dostup.vpn.updater.plist
 pkill -x DostupVPN-StatusBar 2>/dev/null
 # Остановить mihomo LaunchDaemon
 sudo launchctl stop ru.dostup.vpn.mihomo 2>/dev/null

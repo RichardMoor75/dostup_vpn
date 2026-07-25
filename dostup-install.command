@@ -72,7 +72,7 @@ check_macos() {
 # Проверка интернета
 check_internet() {
     print_step "Проверка подключения к интернету..."
-    if ! curl -s --head --connect-timeout 5 https://github.com > /dev/null; then
+    if ! curl -s --head --connect-timeout 5 --max-time 10 https://github.com > /dev/null; then
         print_error "Нет подключения к интернету"
         return 1
     fi
@@ -92,12 +92,12 @@ get_arch() {
 
 # Получение последней версии mihomo
 get_latest_version() {
-    curl -s "$MIHOMO_RELEASES_API" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
+    curl -s --connect-timeout 10 --max-time 30 "$MIHOMO_RELEASES_API" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
 
 get_release_assets() {
     local version="$1"
-    curl -s "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/${version}" \
+    curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/${version}" \
         | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p' \
         | grep '^mihomo-darwin-' || true
 }
@@ -212,7 +212,7 @@ download_mihomo() {
     print_step "Проверка целостности файла..."
     local checksum_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}.sha256"
     local expected_hash
-    expected_hash=$(curl -sL --fail "$checksum_url" 2>/dev/null | awk '{print $1}')
+    expected_hash=$(curl -sL --fail --connect-timeout 10 --max-time 30 "$checksum_url" 2>/dev/null | awk '{print $1}')
 
     # Проверяем что хэш выглядит как SHA256 (64 hex символа)
     if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ ]]; then
@@ -502,7 +502,16 @@ CONFIG_FILE="$DOSTUP_DIR/config.yaml"
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
 GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+INSTALLER_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command"
 SITES_FILE="$DOSTUP_DIR/sites.json"
+API_BASE="http://127.0.0.1:9090"
+
+# Плановое обновление: лог, блокировка, флаги состояния
+UPDATER_LOG="$DOSTUP_DIR/logs/updater.log"
+LOCK_DIR="$DOSTUP_DIR/.lock"
+NOTIFY_FILE="$DOSTUP_DIR/.notify"
+SCRIPT_UPDATE_FLAG="$DOSTUP_DIR/.script-update"
+CORE_PENDING="$DOSTUP_DIR/mihomo.new"
 
 # --- Utility ---
 close_terminal_window() {
@@ -558,12 +567,12 @@ update_settings() {
 }
 
 get_latest_version() {
-    curl -s "$MIHOMO_RELEASES_API" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
+    curl -s --connect-timeout 10 --max-time 30 "$MIHOMO_RELEASES_API" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'
 }
 
 get_release_assets() {
     local version="$1"
-    curl -s "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/${version}" \
+    curl -s --connect-timeout 10 --max-time 30 "https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/${version}" \
         | sed -n 's/.*"name":[[:space:]]*"\([^"]*\)".*/\1/p' \
         | grep '^mihomo-darwin-' || true
 }
@@ -680,7 +689,7 @@ verify_mihomo_checksum() {
     local archive="$3"
     local checksum_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}.sha256"
     local expected_hash
-    expected_hash=$(curl -sL --fail "$checksum_url" 2>/dev/null | awk '{print $1}')
+    expected_hash=$(curl -sL --fail --connect-timeout 10 --max-time 30 "$checksum_url" 2>/dev/null | awk '{print $1}')
 
     if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ ]]; then
         local actual_hash
@@ -708,6 +717,266 @@ secure_config() {
     fi
     rm -f "$tmp"
     return 0
+}
+
+# --- Плановое обновление: инфраструктура ---
+
+log_updater() {
+    mkdir -p "$DOSTUP_DIR/logs" 2>/dev/null
+    # Обрезаем разросшийся лог, оставляя хвост
+    if [[ -f "$UPDATER_LOG" ]] && [[ $(wc -l < "$UPDATER_LOG" 2>/dev/null || echo 0) -gt 500 ]]; then
+        tail -n 200 "$UPDATER_LOG" > "${UPDATER_LOG}.tmp" 2>/dev/null && mv "${UPDATER_LOG}.tmp" "$UPDATER_LOG"
+    fi
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$UPDATER_LOG"
+}
+
+# Блокировка через mkdir — атомарна. Зависшую (>20 мин) снимаем.
+acquire_lock() {
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        return 0
+    fi
+    if [[ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +20 2>/dev/null)" ]]; then
+        log_updater "WARN снята зависшая блокировка"
+        rm -rf "$LOCK_DIR"
+        mkdir "$LOCK_DIR" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+release_lock() {
+    rm -rf "$LOCK_DIR" 2>/dev/null
+}
+
+# Уведомление: текст забирает statusbar-приложение (иконка, единый стиль).
+# Если оно не запущено или файл никто не забрал за час — показываем напрямую.
+notify_user() {
+    local text="$1"
+    if [[ -f "$NOTIFY_FILE" ]] && [[ -n "$(find "$NOTIFY_FILE" -maxdepth 0 -mmin +60 2>/dev/null)" ]]; then
+        rm -f "$NOTIFY_FILE"
+    fi
+    if pgrep -x "DostupVPN-StatusBar" > /dev/null 2>&1; then
+        printf '%s\n' "$text" >> "$NOTIFY_FILE"
+    else
+        # Префикс @ACTION@ понимает только statusbar-приложение (делает уведомление
+        # кликабельным) — в текстовом fallback его надо убрать
+        local plain="${text#@ACTION@}"
+        osascript -e "display notification \"${plain//\"/\\\"}\" with title \"Dostup VPN\"" >/dev/null 2>&1 || true
+    fi
+}
+
+# Перезагрузка конфига работающим mihomo без рестарта процесса
+reload_mihomo_config() {
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+        -X PUT "${API_BASE}/configs?force=true" \
+        -d "{\"path\":\"${CONFIG_FILE}\",\"payload\":\"\"}" 2>/dev/null)
+    [[ "$code" == "204" || "$code" == "200" ]]
+}
+
+# Обновление профиля по ссылке подписки.
+# 0 — профиль изменился и применён, 1 — изменений нет, 2 — ошибка
+update_profile() {
+    local sub_url tmp new_hash old_hash
+    sub_url=$(read_settings "subscription_url")
+    if [[ -z "$sub_url" ]]; then
+        log_updater "profile: URL подписки не задан"
+        return 2
+    fi
+
+    tmp="${CONFIG_FILE}.new"
+    if ! download_with_retry "$sub_url" "$tmp"; then
+        log_updater "profile: не удалось скачать"
+        rm -f "$tmp"
+        return 2
+    fi
+
+    # Истёкшая подписка обычно отдаёт HTML — затирать им рабочий конфиг нельзя
+    if ! validate_yaml "$tmp"; then
+        log_updater "profile: ответ сервера не YAML (истекла подписка?)"
+        rm -f "$tmp"
+        return 2
+    fi
+
+    secure_config "$tmp"
+
+    new_hash=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
+    old_hash=$(shasum -a 256 "$CONFIG_FILE" 2>/dev/null | cut -d' ' -f1)
+    if [[ -n "$old_hash" && "$new_hash" == "$old_hash" ]]; then
+        rm -f "$tmp"
+        log_updater "profile: без изменений"
+        return 1
+    fi
+
+    [[ -f "$CONFIG_FILE" ]] && cp "$CONFIG_FILE" "${CONFIG_FILE}.backup"
+    mv "$tmp" "$CONFIG_FILE"
+
+    if ! pgrep -x "mihomo" > /dev/null; then
+        log_updater "profile: обновлён (mihomo не запущен, применится при старте)"
+        return 0
+    fi
+
+    if reload_mihomo_config; then
+        log_updater "profile: обновлён и применён"
+        return 0
+    fi
+
+    log_updater "profile: ОШИБКА перезагрузки, откат на предыдущий"
+    if [[ -f "${CONFIG_FILE}.backup" ]]; then
+        cp "${CONFIG_FILE}.backup" "$CONFIG_FILE"
+        reload_mihomo_config || true
+    fi
+    return 2
+}
+
+# Geo-базы раз в 14 дней. 0 — обновлены, 1 — рано или ошибка
+update_geo_if_due() {
+    local last_geo last_ts now_ts diff_days ok
+    last_geo=$(read_settings "last_geo_update")
+    if [[ -n "$last_geo" ]]; then
+        last_ts=$(date -j -f "%Y-%m-%d" "$last_geo" "+%s" 2>/dev/null || echo 0)
+        now_ts=$(date "+%s")
+        diff_days=$(( (now_ts - last_ts) / 86400 ))
+        [[ $diff_days -lt 14 ]] && return 1
+    fi
+    ok=true
+    download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat" || ok=false
+    download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat" || ok=false
+    if $ok; then
+        update_settings "last_geo_update" "$(date +%Y-%m-%d)"
+        log_updater "geo: обновлены"
+        return 0
+    fi
+    log_updater "geo: ошибка обновления"
+    return 1
+}
+
+# Предзагрузка ядра рядом с работающим: перезаписать выполняющийся файл нельзя,
+# поэтому качаем в mihomo.new, а подменяем при следующем старте (promote_core).
+preload_core() {
+    local current latest pending arch assets filename url
+    current=$(read_settings "installed_version")
+    latest=$(get_latest_version)
+    if [[ -z "$latest" ]]; then
+        log_updater "core: не удалось получить последнюю версию"
+        return 1
+    fi
+    if [[ "$current" == "$latest" ]]; then
+        rm -f "$CORE_PENDING"
+        log_updater "core: актуально ($current)"
+        return 1
+    fi
+    pending=$(read_settings "pending_core_version")
+    if [[ "$pending" == "$latest" && -f "$CORE_PENDING" ]]; then
+        log_updater "core: $latest уже скачано, ждёт перезапуска"
+        return 1
+    fi
+
+    arch=$(uname -m)
+    [[ "$arch" == "arm64" ]] || arch="amd64"
+    assets=$(get_release_assets "$latest")
+    if ! filename=$(resolve_mihomo_filename "$arch" "$latest" "$assets"); then
+        log_updater "core: нет совместимого бинарника для этой версии macOS"
+        return 1
+    fi
+    url="https://github.com/MetaCubeX/mihomo/releases/download/${latest}/${filename}"
+    if ! download_with_retry "$url" "${CORE_PENDING}.gz"; then
+        log_updater "core: не удалось скачать $latest"
+        rm -f "${CORE_PENDING}.gz"
+        return 1
+    fi
+    if ! verify_mihomo_checksum "$latest" "$filename" "${CORE_PENDING}.gz" >/dev/null 2>&1; then
+        log_updater "core: ошибка проверки хэша"
+        rm -f "${CORE_PENDING}.gz"
+        return 1
+    fi
+    rm -f "$CORE_PENDING"
+    if ! gunzip -f "${CORE_PENDING}.gz"; then
+        log_updater "core: ошибка распаковки"
+        rm -f "${CORE_PENDING}.gz" "$CORE_PENDING"
+        return 1
+    fi
+    chmod +x "$CORE_PENDING"
+    xattr -d com.apple.quarantine "$CORE_PENDING" 2>/dev/null || true
+    update_settings "pending_core_version" "$latest"
+    log_updater "core: $latest скачано, применится при следующем запуске"
+    return 0
+}
+
+# Подмена ядра предзагруженным. Вызывается при старте, когда mihomo остановлен.
+promote_core() {
+    local pending
+    [[ -f "$CORE_PENDING" ]] || return 1
+    pgrep -x "mihomo" > /dev/null && return 1
+    pending=$(read_settings "pending_core_version")
+    mv "$CORE_PENDING" "$MIHOMO_BIN" || return 1
+    chmod +x "$MIHOMO_BIN"
+    xattr -d com.apple.quarantine "$MIHOMO_BIN" 2>/dev/null || true
+    [[ -n "$pending" ]] && update_settings "installed_version" "$pending"
+    update_settings "pending_core_version" ""
+    log_updater "core: применена версия ${pending:-новая}"
+    return 0
+}
+
+# Проверка обновления самого скрипта. 0 — обновление найдено ВПЕРВЫЕ (нужно уведомить)
+check_script_update_flag() {
+    local current_hash new_hash tmp
+    current_hash=$(read_settings "installer_hash")
+    [[ -z "$current_hash" ]] && return 1
+    tmp=$(mktemp "${TMPDIR:-/tmp}/dostup-inst.XXXXXX") || return 1
+    if ! download_with_retry "$INSTALLER_URL" "$tmp"; then
+        rm -f "$tmp"
+        log_updater "script: не удалось проверить обновление"
+        return 1
+    fi
+    new_hash=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
+    rm -f "$tmp"
+    if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
+        if [[ ! -f "$SCRIPT_UPDATE_FLAG" ]]; then
+            echo "$new_hash" > "$SCRIPT_UPDATE_FLAG"
+            log_updater "script: доступно обновление"
+            return 0
+        fi
+        return 1
+    fi
+    rm -f "$SCRIPT_UPDATE_FLAG"
+    return 1
+}
+
+# Обновление провайдеров прокси и правил через API. Печатает краткий итог.
+refresh_providers() {
+    local names name ok fail
+    ok=0
+    fail=0
+    names=$(get_proxy_providers)
+    if [ -n "$names" ]; then
+        while IFS= read -r name; do
+            if curl -s -X PUT --max-time 15 "${API_BASE}/providers/proxies/$name" >/dev/null 2>&1; then
+                ok=$((ok + 1))
+            else
+                fail=$((fail + 1))
+            fi
+        done <<< "$names"
+    fi
+    names=$(get_rule_providers)
+    if [ -n "$names" ]; then
+        while IFS= read -r name; do
+            if curl -s -X PUT --max-time 15 "${API_BASE}/providers/rules/$name" >/dev/null 2>&1; then
+                ok=$((ok + 1))
+            else
+                fail=$((fail + 1))
+            fi
+        done <<< "$names"
+    fi
+    if [[ $ok -eq 0 && $fail -eq 0 ]]; then
+        echo "Провайдеры не найдены"
+        return 1
+    fi
+    if [[ $fail -eq 0 ]]; then
+        echo "Провайдеры обновлены ($ok)"
+        return 0
+    fi
+    echo "Провайдеры: $ok обновлено, $fail с ошибкой"
+    return 1
 }
 
 # --- API-функции (парсинг JSON через osascript, без python3) ---
@@ -985,13 +1254,15 @@ do_update_config() {
 }
 
 do_start_quick() {
+    promote_core || true
+
     # Настройка Application Firewall
     sudo -n /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null || true
     sudo -n /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$MIHOMO_BIN" 2>/dev/null || true
 
     # Запуск через LaunchDaemon
     sudo -n launchctl start ru.dostup.vpn.mihomo
-    sleep 4
+    wait_mihomo_started
 
     if pgrep -x "mihomo" > /dev/null; then
         save_and_set_mihomo_dns
@@ -1001,71 +1272,28 @@ do_start_quick() {
     fi
 }
 
-check_script_update() {
-    local current_hash
-    current_hash=$(read_settings "installer_hash")
-    [[ -z "$current_hash" ]] && return 0
-
-    local url="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command"
-    local tmp="/tmp/dostup-installer-check"
-    # Retry: сеть может быть не готова сразу после остановки VPN
-    if ! download_with_retry "$url" "$tmp"; then
-        rm -f "$tmp"
-        return 0
-    fi
-    local new_hash
-    new_hash=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
-    if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
-        if [[ "$DOSTUP_SILENT" == "1" ]]; then
-            echo "DOSTUP_SCRIPT_UPDATE"
-            rm -f "$tmp"
+# Ожидание готовности mihomo вместо фиксированного sleep: большой конфиг или
+# медленные провайдеры могут не уложиться в 4 секунды и дать ложный «не запустился».
+wait_mihomo_started() {
+    local waited=0
+    while [[ $waited -lt 20 ]]; do
+        sleep 1
+        waited=$((waited + 1))
+        if pgrep -x "mihomo" > /dev/null; then
+            # Процесс есть — даём ему дочитать конфиг и поднять листенеры
+            sleep 2
             return 0
         fi
-        echo ""
-        echo -e "${YELLOW}▶ Доступно обновление скрипта управления${NC}"
-        printf "  Обновить сейчас? (y/N): "
-        read -r choice
-        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            echo -e "${YELLOW}▶ Обновление...${NC}"
-            bash "$tmp"
-            exit 0
-        fi
-    fi
-    rm -f "$tmp"
+    done
+    return 1
 }
 
 do_start() {
-    check_script_update
-    do_update_core
-    do_update_config
-
-    # Обновление geo-баз (раз в 2 недели)
-    should_update_geo=false
-    last_geo=$(read_settings "last_geo_update")
-    if [[ -n "$last_geo" ]]; then
-        last_ts=$(date -j -f "%Y-%m-%d" "$last_geo" "+%s" 2>/dev/null || echo 0)
-        now_ts=$(date "+%s")
-        diff_days=$(( (now_ts - last_ts) / 86400 ))
-        [[ $diff_days -ge 14 ]] && should_update_geo=true
-    else
-        should_update_geo=true
-    fi
-
-    if $should_update_geo; then
-        echo -e "${YELLOW}▶ Обновление geo-баз...${NC}"
-        geo_ok=true
-        if ! download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat"; then
-            echo -e "${RED}✗ Не удалось скачать geoip.dat${NC}"
-            geo_ok=false
-        fi
-        if ! download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat"; then
-            echo -e "${RED}✗ Не удалось скачать geosite.dat${NC}"
-            geo_ok=false
-        fi
-        if $geo_ok; then
-            update_settings "last_geo_update" "$(date +%Y-%m-%d)"
-            echo -e "${GREEN}✓ Geo-базы обновлены${NC}"
-        fi
+    # Здесь намеренно НЕТ сетевых операций: запуск идёт при выключенном VPN,
+    # и любая загрузка с GitHub в этот момент может висеть минутами.
+    # Профиль, geo-базы, ядро и обновление скрипта тянет фоновый ru.dostup.vpn.updater.
+    if promote_core; then
+        echo -e "${GREEN}✓ Установлена обновлённая версия ядра${NC}"
     fi
 
     # Запуск
@@ -1079,7 +1307,7 @@ do_start() {
     # Запуск через LaunchDaemon
     sudo -n launchctl start ru.dostup.vpn.mihomo
 
-    sleep 4
+    wait_mihomo_started
 
     if pgrep -x "mihomo" > /dev/null; then
         save_and_set_mihomo_dns
@@ -1148,23 +1376,101 @@ if [[ -n "$1" ]]; then
             exit 0
             ;;
         restart-silent)
-            export DOSTUP_SILENT=1
-            do_stop >/dev/null 2>&1 || true
-            output=$(do_start 2>&1)
-            summary=""
-            echo "$output" | grep -q "DOSTUP_SCRIPT_UPDATE" && summary="${summary}Обновление скрипта доступно\n"
-            echo "$output" | grep -q "Ядро обновлено" && summary="${summary}Ядро обновлено\n"
-            echo "$output" | grep -q "Конфиг обновлён" && summary="${summary}Конфиг обновлён\n"
-            echo "$output" | grep -q "Geo-базы обновлены" && summary="${summary}Geo-базы обновлены\n"
-            if pgrep -x "mihomo" > /dev/null; then
-                [[ -z "$summary" ]] && summary="VPN перезапущен" || summary="${summary}VPN перезапущен"
-            else
-                summary="Ошибка перезапуска"
+            if ! acquire_lock; then
+                echo "Обновление уже выполняется, попробуйте позже"
+                exit 0
             fi
-            echo -e "$summary"
+            trap release_lock EXIT
+            if ! do_stop >/dev/null 2>&1; then
+                # Ошибку остановки нельзя глушить: без неё launchctl start — no-op,
+                # и «перезапуск» выглядел бы успешным, хотя жив старый процесс
+                # со старым конфигом.
+                log_updater "restart: не удалось остановить mihomo"
+                # do_stop успел вернуть системный DNS, а VPN остался жив —
+                # возвращаем публичный, иначе запросы пойдут мимо туннеля
+                if pgrep -x "mihomo" > /dev/null && [[ ! -f "$DNS_CONF" ]]; then
+                    save_and_set_mihomo_dns >/dev/null 2>&1
+                fi
+                echo "Не удалось остановить VPN"
+                exit 0
+            fi
+            core_msg=""
+            promote_core >/dev/null 2>&1 && core_msg="Ядро обновлено. "
+            do_start >/dev/null 2>&1
+            if pgrep -x "mihomo" > /dev/null; then
+                echo "${core_msg}VPN перезапущен"
+            else
+                log_updater "restart: mihomo не поднялся"
+                echo "Ошибка перезапуска"
+            fi
+            exit 0
+            ;;
+        scheduled-update)
+            # Вызывается LaunchAgent'ом ru.dostup.vpn.updater раз в 6 часов
+            if ! acquire_lock; then
+                log_updater "плановое обновление пропущено: занято"
+                exit 0
+            fi
+            trap release_lock EXIT
+            log_updater "--- плановое обновление ---"
+            update_profile
+            case $? in
+                0) notify_user "Профиль обновлён" ;;
+            esac
+            update_geo_if_due
+            preload_core
+            check_script_update_flag && \
+                notify_user "@ACTION@Доступно обновление Dostup VPN — нажмите, чтобы обновить"
+            exit 0
+            ;;
+        update-profile-silent)
+            # Кнопка «Обновить прокси и правила» из меню иконки
+            if ! acquire_lock; then
+                echo "Обновление уже выполняется"
+                exit 0
+            fi
+            trap release_lock EXIT
+            profile_msg=""
+            update_profile
+            case $? in
+                0) profile_msg="Профиль обновлён. " ;;
+                2) profile_msg="Профиль обновить не удалось. " ;;
+            esac
+            echo "${profile_msg}$(refresh_providers)"
+            exit 0
+            ;;
+        self-update)
+            # Запускается в Терминале: установщику нужны пароль и ответы пользователя
+            echo ""
+            echo -e "${YELLOW}▶ Обновление Dostup VPN${NC}"
+            echo ""
+            tmp_installer=$(mktemp "${TMPDIR:-/tmp}/dostup-inst.XXXXXX") || exit 1
+            if ! download_with_retry "$INSTALLER_URL" "$tmp_installer"; then
+                echo -e "${RED}✗ Не удалось скачать установщик${NC}"
+                rm -f "$tmp_installer"
+                read -p "Нажмите Enter для закрытия..." < /dev/tty
+                exit 1
+            fi
+            if ! head -1 "$tmp_installer" | grep -q '^#!/bin/bash'; then
+                echo -e "${RED}✗ Скачанный файл не похож на установщик${NC}"
+                rm -f "$tmp_installer"
+                read -p "Нажмите Enter для закрытия..." < /dev/tty
+                exit 1
+            fi
+            rm -f "$SCRIPT_UPDATE_FLAG"
+            bash "$tmp_installer"
+            rm -f "$tmp_installer"
             exit 0
             ;;
         update-providers)
+            echo "Обновление профиля..."
+            update_profile
+            case $? in
+                0) echo -e "${GREEN}✓ Профиль обновлён${NC}" ;;
+                1) echo -e "${GREEN}✓ Профиль без изменений${NC}" ;;
+                *) echo -e "${RED}✗ Профиль обновить не удалось${NC}" ;;
+            esac
+            echo ""
             echo "Обновление провайдеров..."
             proxy_providers=$(get_proxy_providers)
             if [ -n "$proxy_providers" ]; then
@@ -1268,6 +1574,14 @@ if pgrep -x "mihomo" > /dev/null; then
             exit 0
             ;;
         3)
+            echo ""
+            echo "Обновление профиля..."
+            update_profile
+            case $? in
+                0) echo -e "${GREEN}✓ Профиль обновлён${NC}" ;;
+                1) echo -e "${GREEN}✓ Профиль без изменений${NC}" ;;
+                *) echo -e "${RED}✗ Профиль обновить не удалось${NC}" ;;
+            esac
             echo ""
             echo "Обновление провайдеров..."
             proxy_providers=$(get_proxy_providers)
@@ -1449,7 +1763,7 @@ import Cocoa
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSUserNotificationCenterDelegate {
 
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
@@ -1458,7 +1772,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var updateProvidersMenuItem: NSMenuItem!
     private var healthcheckMenuItem: NSMenuItem!
     private var checkMenuItem: NSMenuItem!
+    private var updateScriptMenuItem: NSMenuItem!
     private var timer: Timer?
+
+    // Пока идёт перезапуск, таймер не трогает заголовок статуса —
+    // иначе через 5 секунд «Перезапуск...» сменяется на «VPN остановлен»
+    // и пользователь считает, что перезапуск не сработал.
+    private var isRestarting = false
 
     private var colorIcon: NSImage?
     private var grayIcon: NSImage?
@@ -1466,6 +1786,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
     private var controlScript: String {
         return homeDir + "/dostup/Dostup_VPN.command"
+    }
+    // Флаг наличия обновления ставит планировщик (control script)
+    private var scriptUpdateFlag: String {
+        return homeDir + "/dostup/.script-update"
+    }
+    // Очередь уведомлений от фоновых bash-задач
+    private var notifyFile: String {
+        return homeDir + "/dostup/.notify"
     }
 
     // MARK: - Application Lifecycle
@@ -1475,6 +1803,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let appIcon = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png") {
             NSApplication.shared.applicationIconImage = appIcon
         }
+        // Без делегата клики по уведомлениям никуда не приходят
+        NSUserNotificationCenter.default.delegate = self
         loadIcons()
         setupStatusItem()
         setupMenu()
@@ -1553,6 +1883,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // Update script (виден только когда планировщик нашёл обновление)
+        updateScriptMenuItem = NSMenuItem(title: "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C} \u{0441}\u{043A}\u{0440}\u{0438}\u{043F}\u{0442}", action: #selector(updateScript), keyEquivalent: "")
+        updateScriptMenuItem.target = self
+        updateScriptMenuItem.isHidden = true
+        menu.addItem(updateScriptMenuItem)
+
         // Exit
         let exitMenuItem = NSMenuItem(title: "\u{0412}\u{044B}\u{0445}\u{043E}\u{0434}", action: #selector(exitApp), keyEquivalent: "q")
         exitMenuItem.target = self
@@ -1583,6 +1919,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        drainPendingNotifications()
+        updateScriptMenuItem.isHidden = !FileManager.default.fileExists(atPath: scriptUpdateFlag)
+
+        // Во время перезапуска состоянием меню управляет restartVPN()
+        if isRestarting { return }
+
         // Update menu items
         restartMenuItem.isEnabled = running
         updateProvidersMenuItem.isEnabled = running
@@ -1595,6 +1937,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenuItem.title = "\u{25CB} VPN \u{043E}\u{0441}\u{0442}\u{0430}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}"
             toggleMenuItem.title = "\u{0417}\u{0430}\u{043F}\u{0443}\u{0441}\u{0442}\u{0438}\u{0442}\u{044C} VPN"
         }
+    }
+
+    // MARK: - Pending Notifications
+
+    // Фоновые задачи (планировщик ru.dostup.vpn.updater) складывают текст сюда,
+    // чтобы уведомление ушло от приложения — с иконкой и в едином стиле.
+    private func drainPendingNotifications() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: notifyFile) else { return }
+        let content = (try? String(contentsOfFile: notifyFile, encoding: .utf8)) ?? ""
+        try? fm.removeItem(atPath: notifyFile)
+
+        var actionable = false
+        var texts: [String] = []
+        for raw in content.split(separator: "\n") {
+            let line = String(raw).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if line.hasPrefix("@ACTION@") {
+                actionable = true
+                texts.append(String(line.dropFirst(8)))
+            } else {
+                texts.append(line)
+            }
+        }
+        guard !texts.isEmpty else { return }
+        showNotification(title: "Dostup VPN",
+                         text: texts.joined(separator: "\n"),
+                         actionable: actionable)
     }
 
     // MARK: - Process Check
@@ -1682,86 +2052,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restartVPN() {
+        isRestarting = true
         restartMenuItem.isEnabled = false
+        updateProvidersMenuItem.isEnabled = false
         statusMenuItem.title = "\u{21BB} \u{041F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0441}\u{043A}..."
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = [self.controlScript, "restart-silent"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            try? process.run()
-            process.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let output = self.runControlScript("restart-silent")
             let text = output.isEmpty ? "VPN \u{043F}\u{0435}\u{0440}\u{0435}\u{0437}\u{0430}\u{043F}\u{0443}\u{0449}\u{0435}\u{043D}" : output
 
             DispatchQueue.main.async {
+                self.isRestarting = false
                 self.showNotification(title: "Dostup VPN", text: text)
                 self.updateStatus()
-                self.restartMenuItem.isEnabled = self.isMihomoRunning()
             }
         }
     }
 
     @objc private func updateProviders() {
+        updateProvidersMenuItem.isEnabled = false
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let api = "http://127.0.0.1:9090"
-            var allOk = true
-            let semaphore = DispatchSemaphore(value: 0)
-
-            // Update proxy providers dynamically
-            if let url = URL(string: "\(api)/providers/proxies"),
-               let data = try? Data(contentsOf: url),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let providers = json["providers"] as? [String: Any] {
-                for name in providers.keys where name != "default" {
-                    let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
-                    var request = URLRequest(url: URL(string: "\(api)/providers/proxies/\(encoded)")!)
-                    request.httpMethod = "PUT"
-                    request.timeoutInterval = 15
-                    URLSession.shared.dataTask(with: request) { _, response, _ in
-                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
-                            allOk = false
-                        }
-                        semaphore.signal()
-                    }.resume()
-                    semaphore.wait()
-                }
-            } else {
-                allOk = false
-            }
-
-            // Update rule providers dynamically
-            if let url = URL(string: "\(api)/providers/rules"),
-               let data = try? Data(contentsOf: url),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let providers = json["providers"] as? [String: Any] {
-                for name in providers.keys {
-                    let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
-                    var request = URLRequest(url: URL(string: "\(api)/providers/rules/\(encoded)")!)
-                    request.httpMethod = "PUT"
-                    request.timeoutInterval = 15
-                    URLSession.shared.dataTask(with: request) { _, response, _ in
-                        if let http = response as? HTTPURLResponse, !(200...204).contains(http.statusCode) {
-                            allOk = false
-                        }
-                        semaphore.signal()
-                    }.resume()
-                    semaphore.wait()
-                }
-            }
-
+            guard let self = self else { return }
+            // Профиль по ссылке подписки + провайдеры прокси и правил.
+            // Логика целиком в control script: её можно менять без пересборки бинарника.
+            let output = self.runControlScript("update-profile-silent")
+            let text = output.isEmpty ? "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{0438}\u{0435} \u{0437}\u{0430}\u{0432}\u{0435}\u{0440}\u{0448}\u{0435}\u{043D}\u{043E}" : output
             DispatchQueue.main.async {
-                self?.showNotification(
-                    title: "Dostup VPN",
-                    text: allOk ? "\u{041F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{044B} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{044B}" : "\u{041E}\u{0448}\u{0438}\u{0431}\u{043A}\u{0430} \u{043E}\u{0431}\u{043D}\u{043E}\u{0432}\u{043B}\u{0435}\u{043D}\u{0438}\u{044F} \u{043F}\u{0440}\u{043E}\u{0432}\u{0430}\u{0439}\u{0434}\u{0435}\u{0440}\u{043E}\u{0432}"
-                )
+                self.showNotification(title: "Dostup VPN", text: text)
+                self.updateStatus()
             }
         }
     }
@@ -1832,6 +2151,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         runInTerminal(argument: "check")
     }
 
+    // Установщику нужны пароль и ответы пользователя — только в Терминале
+    @objc private func updateScript() {
+        runInTerminal(argument: "self-update")
+    }
+
     @objc private func exitApp() {
         let running = isMihomoRunning()
         if !running {
@@ -1855,6 +2179,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Helpers
+
+    // Синхронный вызов control script с чтением stdout.
+    // Читаем ДО waitUntilExit: иначе при выводе больше размера буфера пайпа
+    // дочерний процесс заблокируется на записи, а мы — в ожидании его выхода.
+    private func runControlScript(_ argument: String) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [controlScript, argument]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return ""
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
 
     private func runInTerminal(argument: String) {
         // Используем временный .command файл вместо AppleScript automation Terminal
@@ -1881,12 +2226,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Notifications
 
-    private func showNotification(title: String, text: String) {
+    private func showNotification(title: String, text: String, actionable: Bool = false) {
         let notification = NSUserNotification()
         notification.title = title
         notification.informativeText = text
         notification.contentImage = NSImage(contentsOfFile: homeDir + "/dostup/icon_app.png")
+        if actionable {
+            notification.hasActionButton = true
+            notification.actionButtonTitle = "\u{041E}\u{0431}\u{043D}\u{043E}\u{0432}\u{0438}\u{0442}\u{044C}"
+            notification.userInfo = ["action": "self-update"]
+        }
         NSUserNotificationCenter.default.deliver(notification)
+    }
+
+    // Приложение живёт в статусбаре и формально почти всегда «активно» —
+    // без этого системa решит не показывать уведомление.
+    func userNotificationCenter(_ center: NSUserNotificationCenter,
+                                shouldPresent notification: NSUserNotification) -> Bool {
+        return true
+    }
+
+    func userNotificationCenter(_ center: NSUserNotificationCenter,
+                                didActivate notification: NSUserNotification) {
+        guard let action = notification.userInfo?["action"] as? String else { return }
+        // Кнопка действия видна только в стиле «Предупреждения»; в «Баннерах»
+        // работает клик по телу уведомления — обрабатываем оба случая.
+        switch notification.activationType {
+        case .actionButtonClicked, .contentsClicked:
+            runInTerminal(argument: action)
+        default:
+            break
+        }
     }
 }
 
@@ -2030,6 +2400,51 @@ LAPLIST
     # Перезагружаем LaunchAgent (unload старый → load новый)
     launchctl unload "$plist_path" 2>/dev/null || true
     launchctl load "$plist_path" 2>/dev/null || true
+}
+
+# LaunchAgent планового обновления: профиль, geo-базы, ядро, проверка скрипта.
+# Раз в 6 часов от пользователя — sudo не нужен нигде, всё через API на 127.0.0.1
+# и файлы в ~/dostup. Пропущенный из-за сна интервал launchd отработает при пробуждении.
+create_updater_agent() {
+    print_step "Настройка планового обновления (раз в 6 часов)..."
+
+    local plist_dir="$HOME/Library/LaunchAgents"
+    local plist_path="$plist_dir/ru.dostup.vpn.updater.plist"
+    local control_script="$DOSTUP_DIR/Dostup_VPN.command"
+
+    mkdir -p "$plist_dir"
+
+    cat > "$plist_path" << UPPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ru.dostup.vpn.updater</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${control_script}</string>
+        <string>scheduled-update</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>21600</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>Nice</key>
+    <integer>5</integer>
+</dict>
+</plist>
+UPPLIST
+
+    launchctl unload "$plist_path" 2>/dev/null || true
+    launchctl load "$plist_path" 2>/dev/null || true
+
+    print_success "Плановое обновление настроено"
 }
 
 # Создание LaunchDaemon для mihomo (системный сервис)
@@ -2201,8 +2616,9 @@ if [[ -f "$SETTINGS_FILE" ]]; then
     OLD_SUB_URL=$(sudo sed -n 's/.*"subscription_url": *"\([^"]*\)".*/\1/p' "$SETTINGS_FILE" 2>/dev/null || true)
 fi
 
-# Остановка statusbar app
+# Остановка statusbar app и планировщика обновлений
 launchctl unload "$HOME/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist" 2>/dev/null || true
+launchctl unload "$HOME/Library/LaunchAgents/ru.dostup.vpn.updater.plist" 2>/dev/null || true
 pkill -x "DostupVPN-StatusBar" 2>/dev/null || true
 
 # Остановка mihomo через LaunchDaemon (если загружен)
@@ -2228,7 +2644,7 @@ if pgrep -x "mihomo" > /dev/null; then
     if pgrep -x "mihomo" > /dev/null; then
         print_error "Не удалось остановить Mihomo"
         echo "Закройте все программы использующие dostup и попробуйте снова"
-        read -p "Нажмите Enter для закрытия..."
+        read -p "Нажмите Enter для закрытия..." < /dev/tty || true
         exit 1
     fi
     print_success "Mihomo остановлен"
@@ -2246,7 +2662,7 @@ fi
 # Проверка интернета
 if ! check_internet; then
     echo ""
-    read -p "Нажмите Enter для закрытия..."
+    read -p "Нажмите Enter для закрытия..." < /dev/tty || true
     exit 1
 fi
 
@@ -2259,7 +2675,7 @@ print_success "Папка создана"
 # Скачивание ядра
 if ! download_mihomo; then
     print_error "Установка прервана"
-    read -p "Нажмите Enter для закрытия..."
+    read -p "Нажмите Enter для закрытия..." < /dev/tty || true
     exit 1
 fi
 
@@ -2288,14 +2704,14 @@ fi
 
 if [[ -z "$SUB_URL" ]]; then
     print_error "URL подписки не указан"
-    read -p "Нажмите Enter для закрытия..."
+    read -p "Нажмите Enter для закрытия..." < /dev/tty || true
     exit 1
 fi
 
 # Валидация URL
 if ! validate_url "$SUB_URL"; then
     print_error "Неверный формат URL. URL должен начинаться с http:// или https://"
-    read -p "Нажмите Enter для закрытия..."
+    read -p "Нажмите Enter для закрытия..." < /dev/tty || true
     exit 1
 fi
 
@@ -2304,7 +2720,7 @@ update_settings "subscription_url" "$SUB_URL"
 # Скачивание конфига
 if ! download_config "$SUB_URL"; then
     print_error "Не удалось скачать конфиг"
-    read -p "Нажмите Enter для закрытия..."
+    read -p "Нажмите Enter для закрытия..." < /dev/tty || true
     exit 1
 fi
 
@@ -2360,6 +2776,10 @@ else
     print_error "Не удалось запустить Mihomo"
     echo "Проверьте логи: $LOGS_DIR/mihomo.log"
 fi
+
+# Планировщик ставим последним: у него RunAtLoad, и первый прогон должен
+# пройти уже при поднятом VPN, а не посреди установки.
+create_updater_agent
 
 echo ""
 echo "Окно закроется через 5 секунд..."
