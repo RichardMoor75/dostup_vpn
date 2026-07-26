@@ -28,6 +28,32 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh && sudo bash dostup-install.sh
 ```
 
+### macOS — персональный установщик (для распространяющего)
+
+Чтобы пользователю не пришлось открывать терминал и вводить URL подписки, можно собрать подписанное и нотаризованное приложение: пользователь распаковывает архив, делает двойной клик — и всё ставится само, без предупреждений Gatekeeper.
+
+Требуется Apple Developer ID. Собирается один раз, персонализируется переименованием — имя папки бандла не входит в подпись, поэтому повторная нотаризация на каждого пользователя не нужна:
+
+```bash
+export DOSTUP_DEV_ID="Developer ID Application: … (TEAMID)"
+export DOSTUP_NOTARY_PROFILE="dostup-notary"
+export DOSTUP_SUB_BASE="https://sub.example.com/conf/yaml"
+
+./make-installer-app.sh build                  # один раз: сборка, подпись, нотаризация
+./make-installer-app.sh pack a_abdrashitova    # для каждого пользователя
+```
+
+На выходе `dist/Установить Dostup VPN [a_abdrashitova].zip`. Приложение берёт слаг из своего имени и собирает ссылку как `<база>/<слаг>.yaml`. Без слага (файл переименован, или собрана обобщённая версия) установщик просто спросит URL, как обычно.
+
+Профиль ключей нотаризации создаётся один раз:
+
+```bash
+xcrun notarytool store-credentials "dostup-notary" \
+    --apple-id "you@example.com" --team-id "TEAMID" --password "app-specific-password"
+```
+
+База URL подписки намеренно не хранится в репозитории и подставляется при сборке через `DOSTUP_SUB_BASE`.
+
 ## Что делает установщик
 
 - Определяет архитектуру системы (Intel/Apple Silicon, amd64/arm64/386) и возможности CPU (AVX2)

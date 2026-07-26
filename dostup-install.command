@@ -21,6 +21,14 @@ SETTINGS_FILE="$DOSTUP_DIR/settings.json"
 MIHOMO_BIN="$DOSTUP_DIR/mihomo"
 DESKTOP_DIR="$HOME/Desktop"
 
+# URL подписки можно передать первым аргументом или переменной DOSTUP_SUB_URL —
+# тогда диалог ввода не показывается. Используется персональным установщиком,
+# который присылают конечному пользователю с уже вшитой ссылкой.
+#   bash dostup-install.command "https://..."
+#   curl -fsSL ... | bash -s -- "https://..."
+# Забираем на верхнем уровне: внутри функций $1 — это уже их собственный аргумент.
+SUB_URL_ARG="${1:-${DOSTUP_SUB_URL:-}}"
+
 # --- URL ---
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
@@ -2610,6 +2618,17 @@ print_header
 # Проверки
 check_macos
 
+# Переданный аргументом URL проверяем ДО удаления старой установки: иначе кривая
+# ссылка в персональном установщике снесёт рабочую конфигурацию и ничего не поставит
+if [[ -n "$SUB_URL_ARG" ]] && ! validate_url "$SUB_URL_ARG"; then
+    print_error "Неверный URL подписки, переданный установщику:"
+    echo "  $SUB_URL_ARG"
+    echo "  URL должен начинаться с http:// или https://"
+    echo ""
+    read -p "Нажмите Enter для закрытия..." < /dev/tty || true
+    exit 1
+fi
+
 # Сохраняем старую подписку если есть (файл может быть с правами root)
 OLD_SUB_URL=""
 if [[ -f "$SETTINGS_FILE" ]]; then
@@ -2682,7 +2701,12 @@ fi
 # Запрос URL подписки
 print_step "Настройка подписки..."
 
-if [[ -n "$OLD_SUB_URL" ]]; then
+if [[ -n "$SUB_URL_ARG" ]]; then
+    # Подписка передана снаружи — ничего не спрашиваем.
+    # Аргумент имеет приоритет над сохранённой: пользователю могли прислать новый профиль.
+    SUB_URL="$SUB_URL_ARG"
+    print_success "Подписка получена из параметра запуска"
+elif [[ -n "$OLD_SUB_URL" ]]; then
     # Есть старая подписка — спрашиваем что делать
     print_info "Найдена предыдущая подписка"
     echo ""
