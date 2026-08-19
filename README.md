@@ -25,8 +25,12 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 Скачай и запусти:
 
 ```bash
-curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh && sudo bash dostup-install.sh
+{ curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://github.com/RichardMoor75/dostup_vpn/releases/latest/download/dostup-install.sh || curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh; } && sudo bash dostup-install.sh
 ```
+
+До публикации первого `installer-v*` release команда автоматически использует
+ветку разработки `master`. После публикации будет выбираться стабильный release;
+установленная копия проверяется по SHA-256 digest из GitHub Releases.
 
 ### macOS — персональный установщик (для распространяющего)
 
@@ -59,9 +63,9 @@ xcrun notarytool store-credentials "dostup-notary" \
 - Определяет архитектуру системы (Intel/Apple Silicon, amd64/arm64/386) и возможности CPU (AVX2)
 - Скачивает подходящую версию ядра Mihomo с GitHub (compatible-билд для старых CPU без AVX2)
 - Запрашивает URL подписки (конфига) через GUI-диалог (на Linux — терминал)
-- Скачивает и валидирует конфиг (проверка YAML)
+- Скачивает конфиг и проверяет итоговый результат точным ядром Mihomo (`mihomo -t`)
 - Защищает API управления: `external-controller` принудительно привязывается к `127.0.0.1` (если в подписке был `0.0.0.0` — переписывается, чтобы API не был доступен извне)
-- Скачивает geo-базы (geoip.dat, geosite.dat)
+- Скачивает GeoIP, GeoSite и ASN из GitHub Releases и обязательно сверяет SHA-256 digest
 - Создаёт иконку управления VPN (macOS — menu bar, Windows — системный трей, Linux — CLI `dostup`)
 - macOS menu bar: при наличии рабочего `swiftc` собирает локально (через `xcrun swiftc`), при ошибке/отсутствии — скачивает готовый бинарник
 - Создаёт приложение `Dostup_VPN` (macOS — ~/Applications, Windows — ярлык на рабочем столе) и systemd-сервис (Linux)
@@ -103,13 +107,15 @@ xcrun notarytool store-credentials "dostup-notary" \
 
 - Остановки VPN
 - Перезапуска VPN
-- Обновления профиля и провайдеров прокси/правил
+- Обновления профиля и прокси-провайдеров
 - Проверки нод (healthcheck — какие прокси живые)
 - Проверки доступа к заблокированным ресурсам
 
-На Linux используй `sudo dostup start|stop|restart|status|check|update-providers|healthcheck|log`.
+На Linux используй `sudo dostup start|stop|restart|rollback|status|check|update-providers|healthcheck|log`.
 
-На Linux при каждом обновлении конфига автоматически добавляется кастомный rule-provider `proxy-rules` (правила маршрутизации с сервера) и соответствующее правило `RULE-SET` перед `MATCH`.
+На Linux импорт сохраняет прежнее поведение: блоки `tun` и `rule-providers`,
+а также правила `RULE-SET` удаляются; финальный `MATCH` направляется в
+`Auto Select`. Прокси-провайдеры из подписки сохраняются.
 
 ## Обновления
 
@@ -128,7 +134,11 @@ xcrun notarytool store-credentials "dostup-notary" \
 
 ### Windows и Linux
 
-Обновления проверяются при каждом запуске: скрипт управления, ядро Mihomo, конфиг, geo-базы (раз в 2 недели).
+Обновления проверяются при `sudo dostup restart`/`update`: менеджер, ядро
+Mihomo, профиль и geo-базы (раз в 2 недели). Linux сначала собирает и проверяет
+кандидат, а работающий сервис останавливает только для короткой подмены. При
+локальной ошибке запуска выполняется автоматический rollback; сбой внешнего
+сайта или нод показывает предупреждение без отката.
 
 ## Панель управления
 
@@ -166,8 +176,9 @@ xcrun notarytool store-credentials "dostup-notary" \
 ├── mihomo                   # Ядро (mihomo.exe на Windows)
 ├── mihomo.new               # Скачанное обновление ядра (macOS, до подмены при перезапуске)
 ├── config.yaml              # Конфиг из подписки
-├── geoip.dat                # База IP-адресов
-├── geosite.dat              # База доменов
+├── GeoIP.dat                # База IP-адресов (Linux)
+├── GeoSite.dat              # База доменов (Linux)
+├── ASN.mmdb                 # База ASN (Linux)
 ├── settings.json            # Настройки (URL подписки, версия)
 ├── sites.json               # Список сайтов для проверки доступа
 ├── icon.ico                 # Иконка для ярлыков (Windows)
@@ -197,6 +208,9 @@ xcrun notarytool store-credentials "dostup-notary" \
 # Linux дополнительно:
 /etc/systemd/system/dostup.service   # systemd-сервис
 /usr/local/bin/dostup                # CLI-обёртка
+/opt/dostup/dostup-manager.sh        # единый установщик/менеджер
+/opt/dostup/.known-good/             # один последний рабочий резерв
+/run/dostup.lock                     # блокировка параллельных изменений
 ```
 
 ## Проверка доступа

@@ -1,0 +1,38 @@
+mixed-port: 2080
+external-controller: 0.0.0.0:9090
+external-ui: ui
+external-ui-url: https://example.com/ui.zip
+mode: rule
+
+tun:
+  enable: true
+  stack: mixed
+
+dns:
+  enable: true
+  listen: 0.0.0.0:53
+  nameserver:
+    - https://1.1.1.1/dns-query
+
+proxies:
+  - name: Node
+    type: socks5
+    server: 127.0.0.1
+    port: 1080
+
+proxy-groups:
+  - name: Auto Select
+    type: select
+    proxies:
+      - Node
+
+rule-providers:
+  private:
+    type: http
+    behavior: domain
+    url: https://example.com/private.yaml
+
+rules:
+  - RULE-SET,private,DIRECT
+  - DOMAIN-SUFFIX,example.org,Node
+  - MATCH,Node

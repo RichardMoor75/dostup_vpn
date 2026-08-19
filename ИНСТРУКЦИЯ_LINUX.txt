@@ -9,7 +9,11 @@
 
 ШАГ 2: Скачайте установочный скрипт
 
-   curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh
+   { curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://github.com/RichardMoor75/dostup_vpn/releases/latest/download/dostup-install.sh || curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh; }
+
+   До публикации первого installer-v release используется
+   резервный dev-источник master. Затем команда автоматически
+   начнёт брать стабильный release.
 
 ШАГ 3: Запустите установку
 
@@ -36,10 +40,12 @@
    │  sudo dostup stop             │ Остановить VPN     │
    │  sudo dostup restart          │ Перезапуск +       │
    │                               │ обновление         │
+   │  sudo dostup rollback         │ Откат к последней  │
+   │                               │ рабочей версии     │
    │  sudo dostup status           │ Показать статус    │
    │  dostup check                 │ Проверить доступ   │
-   │  dostup update-providers      │ Обновить прокси    │
-   │                               │ и правила          │
+   │  sudo dostup update-providers │ Обновить прокси-   │
+   │                               │ провайдеры         │
    │  dostup healthcheck           │ Проверить какие    │
    │                               │ ноды живые         │
    │  dostup log                   │ Логи (live)        │
@@ -98,23 +104,17 @@ VPN работает как локальный прокси на порту 7890
    unset HTTPS_PROXY HTTP_PROXY
 
 -------------------------------------
-КАСТОМНЫЕ ПРАВИЛА МАРШРУТИЗАЦИИ
+ОБРАБОТКА ПРОФИЛЯ ДЛЯ LINUX
 -------------------------------------
-При обработке конфига автоматически добавляется
-кастомный rule-provider proxy-rules, который
-загружает правила маршрутизации с сервера:
+Поведение импорта не изменилось:
+   • блок tun удаляется;
+   • блок rule-providers и правила RULE-SET удаляются;
+   • proxy-providers сохраняются;
+   • финальный MATCH направляется в Auto Select;
+   • API и DNS привязываются к loopback.
 
-   rule-providers:
-     proxy-rules:
-       url: https://files.richard-moor.ru/admin/proxy.yml
-       interval: 86400 (обновление раз в сутки)
-
-Соответствующее правило RULE-SET,proxy-rules
-вставляется перед MATCH, чтобы кастомные правила
-имели приоритет над финальным маршрутом.
-
-Правила сохраняются при каждом обновлении конфига
-(sudo dostup restart).
+После этих преобразований итоговый профиль обязательно
+проверяется командой mihomo -t до замены рабочей версии.
 
 -------------------------------------
 ОБНОВЛЕНИЕ КОНФИГА И ЯДРА
@@ -124,9 +124,14 @@ VPN работает как локальный прокси на порту 7890
 Скрипт автоматически:
    • Проверит обновление ядра Mihomo
    • Скачает свежий конфиг по URL подписки
-   • Добавит кастомные правила маршрутизации
-   • Обновит geo-базы (раз в 14 дней)
-   • Перезапустит сервис
+   • Проверит итоговую комбинацию ядра и профиля
+   • Обновит GeoIP, GeoSite и ASN (раз в 14 дней)
+   • Проверит SHA-256 всех release-артефактов
+   • Коротко перезапустит сервис после полной подготовки
+
+Если новый профиль недоступен, проверенное обновление ядра
+всё равно может быть применено, и наоборот. При локальной
+ошибке запуска выполняется автоматический rollback.
 
 -------------------------------------
 СМЕНА URL ПОДПИСКИ
@@ -171,7 +176,8 @@ Dostup автоматически запускается при загрузке
    → Проверьте URL подписки в settings.json
 
 Mihomo падает после обновления:
-   → Переустановите: sudo bash dostup-install.sh
+   → Выполните: sudo dostup rollback
+   → Затем проверьте: journalctl -u dostup -n 50
 
 =====================================
      УДАЛЕНИЕ (если нужно)

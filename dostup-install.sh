@@ -1,435 +1,481 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-# ============================================
-# Dostup Installer for Mihomo (Linux)
-# Ubuntu / Debian (headless server)
-# ============================================
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; NC='\033[0m'
 
-set -e
-
-# --- Цвета для вывода ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-# --- Пути ---
-DOSTUP_DIR="/opt/dostup"
+DOSTUP_DIR="${DOSTUP_DIR:-/opt/dostup}"
 CONFIG_FILE="$DOSTUP_DIR/config.yaml"
 SETTINGS_FILE="$DOSTUP_DIR/settings.json"
 MIHOMO_BIN="$DOSTUP_DIR/mihomo"
-CLI_PATH="/usr/local/bin/dostup"
-SERVICE_FILE="/etc/systemd/system/dostup.service"
+SITES_FILE="$DOSTUP_DIR/sites.json"
+KNOWN_GOOD_DIR="$DOSTUP_DIR/.known-good"
+CLI_PATH="${DOSTUP_CLI_PATH:-/usr/local/bin/dostup}"
+SERVICE_FILE="${DOSTUP_SERVICE_FILE:-/etc/systemd/system/dostup.service}"
+LOCK_FILE="${DOSTUP_LOCK_FILE:-/run/dostup.lock}"
 
-# --- URL ---
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
-GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
-GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+GEO_RELEASES_API="https://api.github.com/repos/MetaCubeX/meta-rules-dat/releases/latest"
+INSTALLER_RELEASES_API="https://api.github.com/repos/RichardMoor75/dostup_vpn/releases?per_page=30"
+INSTALLER_RAW_URL="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh"
+INSTALLER_BUILD_VERSION="${DOSTUP_INSTALLER_VERSION:-dev}"
 
-# --- Глобальные переменные ---
-SUB_URL=""
-PROXY_PORT=""
+SUB_URL=""; PROXY_PORT=""; ACTIVE_STAGE=""; LOCK_FD=""
+STAGED_INSTALLER_VERSION=""
 
-# --- Функции вывода ---
+MANAGED_FILES=(
+  mihomo config.yaml settings.json dostup-manager.sh sites.json
+  GeoIP.dat GeoSite.dat ASN.mmdb geoip.dat geosite.dat
+  geoip.metadb country.mmdb cache.db
+)
 
-print_step() {
-    echo -e "${YELLOW}▶ $1${NC}"
+print_step()    { echo -e "${YELLOW}▶ $1${NC}"; }
+print_success() { echo -e "${GREEN}✓ $1${NC}"; }
+print_error()   { echo -e "${RED}✗ $1${NC}"; }
+print_info()    { echo -e "${BLUE}ℹ $1${NC}"; }
+print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
+
+check_paths() {
+  [[ "$DOSTUP_DIR" == /* && "$DOSTUP_DIR" != "/" ]] ||
+    { print_error "Небезопасный путь установки: $DOSTUP_DIR"; return 1; }
 }
-
-print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
-}
-
-print_error() {
-    echo -e "${RED}✗ $1${NC}"
-}
-
-print_info() {
-    echo -e "${BLUE}ℹ $1${NC}"
-}
-
-print_warning() {
-    echo -e "${YELLOW}⚠ $1${NC}"
-}
-
-# --- Проверка root ---
 check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        print_error "Этот скрипт должен быть запущен от root (sudo)"
-        echo "Используйте: sudo bash $0"
-        exit 1
-    fi
+  [[ $EUID -eq 0 ]] || {
+    print_error "Этот скрипт должен быть запущен от root (sudo)"
+    echo "Используйте: sudo bash $0"; exit 1
+  }
 }
-
-# --- Проверка ОС ---
+require_root() {
+  [[ $EUID -eq 0 ]] ||
+    { print_error "Требуется root. Используйте: sudo dostup ${1:-}"; exit 1; }
+}
 check_os() {
-    if [[ ! -f /etc/os-release ]]; then
-        print_error "Не удалось определить ОС"
-        exit 1
-    fi
-
-    . /etc/os-release
-
-    if [[ "$ID" != "ubuntu" && "$ID" != "debian" && "$ID_LIKE" != *"debian"* && "$ID_LIKE" != *"ubuntu"* ]]; then
-        print_error "Поддерживаются только Ubuntu и Debian"
-        print_info "Обнаружена ОС: $PRETTY_NAME"
-        exit 1
-    fi
-
-    print_success "ОС: $PRETTY_NAME"
+  [[ -f /etc/os-release ]] || { print_error "Не удалось определить ОС"; exit 1; }
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  if [[ "${ID:-}" != ubuntu && "${ID:-}" != debian &&
+        "${ID_LIKE:-}" != *debian* && "${ID_LIKE:-}" != *ubuntu* ]]; then
+    print_error "Поддерживаются только Ubuntu и Debian"
+    print_info "Обнаружена ОС: ${PRETTY_NAME:-неизвестно}"; exit 1
+  fi
+  print_success "ОС: ${PRETTY_NAME:-$ID}"
 }
-
-# --- Проверка интернета ---
-# Пробуем несколько хостов с -4, чтобы не упасть, если конкретно github.com
-# заблокирован/тормозит у юзера (а ставит он именно из-за блокировок).
-check_internet() {
-    print_step "Проверка подключения к интернету..."
-    local host
-    for host in https://1.1.1.1 https://api.github.com https://raw.githubusercontent.com; do
-        if curl -s -4 --head --connect-timeout 5 --max-time 10 "$host" > /dev/null 2>&1; then
-            print_success "Интернет доступен"
-            return 0
-        fi
-    done
-    print_error "Нет подключения к интернету"
-    exit 1
+install_lock_dependency() {
+  command -v flock >/dev/null 2>&1 && return 0
+  apt-get update -qq
+  apt-get install -y -qq util-linux
 }
-
-# --- Определение архитектуры ---
-detect_arch() {
-    local arch
-    arch=$(uname -m)
-    case "$arch" in
-        x86_64)  echo "amd64" ;;
-        aarch64) echo "arm64" ;;
-        *)
-            print_error "Неподдерживаемая архитектура: $arch"
-            exit 1
-            ;;
-    esac
+acquire_lock() {
+  mkdir -p "$(dirname "$LOCK_FILE")"
+  exec {LOCK_FD}>"$LOCK_FILE"
+  flock -n "$LOCK_FD" ||
+    { print_error "Другая операция Dostup уже выполняется"; exit 75; }
 }
-
-# --- Установка зависимостей ---
 install_dependencies() {
-    print_step "Проверка зависимостей..."
-    local need_install=false
-
-    for pkg in curl jq; do
-        if ! command -v "$pkg" &>/dev/null; then
-            need_install=true
-            break
-        fi
-    done
-
-    if $need_install; then
-        print_step "Установка зависимостей (curl, jq)..."
-        apt-get update -qq
-        apt-get install -y -qq curl jq
-        print_success "Зависимости установлены"
-    else
-        print_success "Зависимости в порядке"
+  print_step "Проверка зависимостей..."
+  local command_name missing=false
+  for command_name in curl jq gzip sha256sum flock ss; do
+    command -v "$command_name" >/dev/null 2>&1 || { missing=true; break; }
+  done
+  if $missing; then
+    apt-get update -qq
+    apt-get install -y -qq ca-certificates curl jq gzip coreutils util-linux iproute2
+  fi
+  print_success "Зависимости в порядке"
+}
+check_internet() {
+  print_step "Проверка подключения к интернету..."
+  local host
+  for host in https://api.github.com https://raw.githubusercontent.com; do
+    if curl -f -sS -4 --head --connect-timeout 5 --max-time 10 \
+      --proto '=https' --proto-redir '=https' "$host" >/dev/null 2>&1; then
+      print_success "Интернет доступен"; return 0
     fi
+  done
+  print_error "Нет подключения к интернету"; return 1
+}
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64) echo amd64 ;;
+    aarch64) echo arm64 ;;
+    *) print_error "Неподдерживаемая архитектура: $(uname -m)" >&2; return 1 ;;
+  esac
 }
 
-# --- Скачивание с retry ---
-download_with_retry() {
-    local url="$1"
-    local output="$2"
-    local max_retries=3
-    local retry=0
-
-    while [[ $retry -lt $max_retries ]]; do
-        if curl -fL -4 --connect-timeout 10 --max-time 120 -s -o "$output" "$url" 2>/dev/null; then
-            if [[ -s "$output" ]]; then
-                return 0
-            fi
-        fi
-        retry=$((retry + 1))
-        print_info "Повтор скачивания ($retry/$max_retries)..."
-        sleep 2
-    done
-    return 1
+is_private_ipv4() {
+  local a b c d octet
+  IFS=. read -r a b c d <<< "$1"
+  [[ -n "${a:-}" && -n "${b:-}" && -n "${c:-}" && -n "${d:-}" ]] || return 1
+  for octet in "$a" "$b" "$c" "$d"; do
+    [[ "$octet" =~ ^[0-9]{1,3}$ ]] && (( 10#$octet <= 255 )) || return 1
+  done
+  (( 10#$a == 10 || 10#$a == 127 ||
+     (10#$a == 172 && 10#$b >= 16 && 10#$b <= 31) ||
+     (10#$a == 192 && 10#$b == 168) ))
 }
-
-# --- Валидация URL ---
+is_private_ipv6() {
+  local host="${1,,}"
+  [[ "$host" == "::1" || "$host" =~ ^f[cd][0-9a-f]{2}: ||
+     "$host" =~ ^fe[89ab][0-9a-f]: ]]
+}
+extract_url_host() {
+  local rest authority host suffix
+  rest="${1#*://}"; authority="${rest%%[/?#]*}"
+  [[ -n "$authority" && "$authority" != *"@"* ]] || return 1
+  if [[ "$authority" == \[* ]]; then
+    [[ "$authority" == *"]"* ]] || return 1
+    host="${authority#\[}"; host="${host%%\]*}"; suffix="${authority#*\]}"
+    [[ -z "$suffix" || "$suffix" =~ ^:[0-9]+$ ]] || return 1
+  else
+    [[ "${authority//[^:]}" != *"::"* ]] || return 1
+    host="${authority%%:*}"; suffix="${authority#"$host"}"
+    [[ -z "$suffix" || "$suffix" =~ ^:[0-9]+$ ]] || return 1
+  fi
+  [[ -n "$host" ]] && printf '%s\n' "$host"
+}
 validate_url() {
-    [[ "$1" =~ ^https?:// ]]
+  local url="$1" host
+  [[ -n "$url" && "$url" != *[$'\r\n\t ']* ]] || return 1
+  case "$url" in
+    https://*) host=$(extract_url_host "$url") && [[ -n "$host" ]] ;;
+    http://*)
+      host=$(extract_url_host "$url") || return 1
+      host="${host,,}"
+      [[ "$host" == localhost ]] || is_private_ipv4 "$host" || is_private_ipv6 "$host"
+      ;;
+    *) return 1 ;;
+  esac
 }
 
-# --- Валидация YAML ---
+download_with_retry() {
+  local url="$1" output="$2" retry=0
+  local -a protocol_args
+  if [[ "$url" == https://* ]]; then
+    protocol_args=(--proto '=https' --proto-redir '=https' -L)
+  elif [[ "$url" == http://* ]] && validate_url "$url"; then
+    protocol_args=(--proto '=http')
+  else
+    return 1
+  fi
+  while (( retry < 3 )); do
+    if curl -f -sS -4 --connect-timeout 10 --max-time 120 \
+      "${protocol_args[@]}" -o "$output" "$url" 2>/dev/null && [[ -s "$output" ]]; then
+      return 0
+    fi
+    retry=$((retry + 1)); print_info "Повтор скачивания ($retry/3)..."; sleep 2
+  done
+  return 1
+}
+verify_sha256_digest() {
+  [[ "$2" =~ ^sha256:([a-fA-F0-9]{64})$ ]] || return 1
+  local expected="${BASH_REMATCH[1],,}" actual
+  actual=$(sha256sum "$1" | awk '{print $1}')
+  [[ "$actual" == "$expected" ]]
+}
+download_verified_release_asset() {
+  local json="$1" name="$2" output="$3" count url digest
+  count=$(jq --arg n "$name" '[.assets[]? | select(.name == $n)] | length' "$json") ||
+    return 1
+  [[ "$count" == 1 ]] || return 1
+  url=$(jq -r --arg n "$name" '.assets[] | select(.name == $n) |
+    .browser_download_url' "$json")
+  digest=$(jq -r --arg n "$name" '.assets[] | select(.name == $n) |
+    .digest // empty' "$json")
+  [[ "$url" == https://* && "$digest" =~ ^sha256:[a-fA-F0-9]{64}$ ]] || return 1
+  download_with_retry "$url" "$output" || return 1
+  verify_sha256_digest "$output" "$digest" || { rm -f "$output"; return 1; }
+}
 validate_yaml() {
-    local file="$1"
-    local content
-    content=$(cat "$file" 2>/dev/null)
-
-    # Проверяем что это не HTML (ошибка сервера)
-    if echo "$content" | head -c 1000 | grep -qiE '<!DOCTYPE|<html|<head'; then
-        return 1
-    fi
-
-    # Проверяем базовую структуру YAML
-    if ! echo "$content" | grep -qE '^[a-zA-Z_-]+:'; then
-        return 1
-    fi
-
-    # Проверяем обязательное поле mixed-port
-    if ! echo "$content" | grep -qE '^mixed-port:'; then
-        return 1
-    fi
-
-    return 0
+  [[ -s "$1" ]] || return 1
+  if head -c 1000 "$1" | grep -qiE '<!DOCTYPE|<html|<head'; then return 1; fi
+  grep -qE '^[a-zA-Z_-]+:' "$1" && grep -qE '^mixed-port:' "$1"
 }
 
-# --- Проверка свободен ли порт ---
 check_port_free() {
-    local port="$1"
-    if ss -tlnp 2>/dev/null | grep -qE ":${port}\b"; then
-        return 1
-    fi
-    return 0
+  local port="$1" allowed="${2:-}"
+  [[ -n "$allowed" && "$port" == "$allowed" ]] && return 0
+  ! ss -H -tln 2>/dev/null | awk -v p="$port" \
+    '$4 ~ (":" p "$") { f=1 } END { exit !f }'
 }
-
-# --- Поиск свободного порта ---
 find_free_port() {
-    local port="$1"
-    while ! check_port_free "$port"; do
-        port=$((port + 1))
-        if [[ $port -gt 65535 ]]; then
-            print_error "Не удалось найти свободный порт"
-            exit 1
-        fi
-    done
-    echo "$port"
+  local port="$1" allowed="${2:-}"
+  while ! check_port_free "$port" "$allowed"; do
+    port=$((port + 1))
+    (( port <= 65535 )) ||
+      { print_error "Не удалось найти свободный порт" >&2; return 1; }
+  done
+  echo "$port"
 }
 
-# --- Обработка конфига для Linux ---
-# Удаляет: external-ui, tun, rule-providers, RULE-SET правила
-# Оставляет: external-controller (для API — update-providers, healthcheck)
-# Меняет: DNS listen на 127.0.0.1:1053
-# Меняет: MATCH на Auto Select
-# Проверяет: свободность порта mixed-port
-# Результат в глобальной переменной PROXY_PORT
+# Инвариант: последовательность преобразований профиля не изменена.
 process_config() {
-    local config="$1"
-    local temp="${config}.processing"
+  local config="$1" allowed="${2:-}" temp="${1}.processing"
+  sed '/^external-ui:/d; /^external-ui-url:/d' "$config" > "$temp"
+  awk 'BEGIN{s=0} /^tun:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' \
+    "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
+  awk 'BEGIN{s=0} /^rule-providers:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' \
+    "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
+  sed -i '/RULE-SET/d' "$temp"
+  sed -i -E 's/^([[:space:]]*)- MATCH,(.*)/\1- MATCH,Auto Select/' "$temp"
+  sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
+  sed -i -E "s/^(external-controller:[[:space:]]*)['\"]?0\.0\.0\.0:([0-9]+)['\"]?(.*)$/\1'127.0.0.1:\2'\3/" "$temp"
+  local port desired=7890
+  port=$(awk -F: '/^mixed-port:[[:space:]]*[0-9]+/ {
+    v=$2; gsub(/[[:space:]]/, "", v); print v; exit }' "$temp")
+  [[ -n "$port" ]] || port=7890
+  if [[ "$port" != "$desired" ]]; then
+    sed -i "s/mixed-port: $port/mixed-port: $desired/" "$temp"; port="$desired"
+  fi
+  if ! check_port_free "$port" "$allowed"; then
+    local new_port
+    new_port=$(find_free_port "$port" "$allowed")
+    sed -i "s/mixed-port: $port/mixed-port: $new_port/" "$temp"
+    print_warning "Порт $port занят, используется $new_port"; port="$new_port"
+  fi
+  mv "$temp" "$config"; PROXY_PORT="$port"
+}
+get_proxy_port_from() {
+  local port
+  port=$(awk -F: '/^mixed-port:[[:space:]]*[0-9]+/ {
+    v=$2; gsub(/[[:space:]]/, "", v); print v; exit }' "$1" 2>/dev/null || true)
+  echo "${port:-7890}"
+}
+get_proxy_port() { get_proxy_port_from "$CONFIG_FILE"; }
 
-    # 1. Удаление external-ui, external-ui-url (external-controller оставляем для API)
-    sed '/^external-ui:/d; /^external-ui-url:/d' "$config" > "$temp"
-
-    # 2. Удаление блока tun: (от tun: до следующего ключа верхнего уровня)
-    awk 'BEGIN{s=0} /^tun:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
-
-    # 3. Удаление блока rule-providers:
-    awk 'BEGIN{s=0} /^rule-providers:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
-
-    # 4. Удаление всех правил RULE-SET из rules:
-    sed -i '/RULE-SET/d' "$temp"
-
-    # 4.1. Финальное правило всегда направляем в Auto Select
-    sed -i -E 's/^([[:space:]]*)- MATCH,.*/\1- MATCH,Auto Select/' "$temp"
-
-    # 5. Замена DNS listen: 0.0.0.0:53 → 127.0.0.1:1053
-    sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
-
-    # 5.1. Безопасный bind: external-controller только на loopback
-    sed -i -E "s/^(external-controller:[[:space:]]*)['\"]?0\.0\.0\.0:([0-9]+)['\"]?(.*)$/\1'127.0.0.1:\2'\3/" "$temp"
-
-    # 6. Принудительная установка mixed-port: 7890 (если свободен)
-    local port desired_port=7890
-    port=$(grep -oP 'mixed-port:\s*\K\d+' "$temp" 2>/dev/null || echo "7890")
-    if [[ "$port" != "$desired_port" ]]; then
-        sed -i "s/mixed-port: $port/mixed-port: $desired_port/" "$temp"
-        port="$desired_port"
-    fi
-
-    if ! check_port_free "$port"; then
-        local new_port
-        new_port=$(find_free_port "$port")
-        sed -i "s/mixed-port: $port/mixed-port: $new_port/" "$temp"
-        print_warning "Порт $port занят, используется $new_port"
-        port="$new_port"
-    fi
-
-    mv "$temp" "$config"
-    PROXY_PORT="$port"
+ensure_settings_file() {
+  if [[ ! -s "$1" ]] || ! jq -e 'type == "object"' "$1" >/dev/null 2>&1; then
+    printf '{}\n' > "$1"
+  fi
+  chmod 600 "$1"
+}
+settings_get_from() {
+  [[ -f "$1" ]] && jq -r --arg k "$2" '.[$k] // ""' "$1" 2>/dev/null || true
+}
+read_settings() { settings_get_from "$SETTINGS_FILE" "$1"; }
+settings_set_in() {
+  local tmp="${1}.tmp"
+  ensure_settings_file "$1"
+  jq --arg k "$2" --arg v "$3" '.[$k] = $v' "$1" > "$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$1"
 }
 
-# --- Получение последней версии mihomo ---
-get_latest_version() {
-    curl -s -4 --connect-timeout 10 --max-time 30 "$MIHOMO_RELEASES_API" | jq -r '.tag_name'
+cleanup_active_stage() {
+  if [[ -n "$ACTIVE_STAGE" && "$ACTIVE_STAGE" == "$DOSTUP_DIR"/.staging.* &&
+        -d "$ACTIVE_STAGE" ]]; then rm -rf -- "$ACTIVE_STAGE"; fi
+  ACTIVE_STAGE=""
+}
+create_stage() {
+  mkdir -p "$DOSTUP_DIR"
+  local stage
+  stage=$(mktemp -d "$DOSTUP_DIR/.staging.XXXXXX")
+  chmod 700 "$stage"; echo "$stage"
+}
+copy_if_present() {
+  [[ -e "$1" ]] && cp -aL "$1" "$2"
+  return 0
+}
+migrate_legacy_runtime() {
+  local legacy="${DOSTUP_LEGACY_RUNTIME:-/root/.config/mihomo}" name dir
+  [[ -d "$legacy" ]] || return 0
+  print_step "Миграция runtime Mihomo в $DOSTUP_DIR..."
+  for name in GeoIP.dat GeoSite.dat ASN.mmdb geoip.dat geosite.dat \
+    geoip.metadb country.mmdb cache.db; do
+    [[ -e "$legacy/$name" && ! -e "$DOSTUP_DIR/$name" ]] &&
+      cp -aL "$legacy/$name" "$DOSTUP_DIR/$name"
+  done
+  for dir in proxies rules; do
+    if [[ -d "$legacy/$dir" ]]; then
+      mkdir -p "$DOSTUP_DIR/$dir"
+      cp -a -n -L "$legacy/$dir/." "$DOSTUP_DIR/$dir/"
+    fi
+  done
+  print_success "Runtime проверен; legacy-каталог оставлен без изменений"
+}
+seed_candidate() {
+  local name
+  for name in "${MANAGED_FILES[@]}"; do
+    copy_if_present "$DOSTUP_DIR/$name" "$1/$name"
+  done
+  ensure_settings_file "$1/settings.json"
 }
 
-# --- Управление settings.json (через jq) ---
-update_settings() {
-    local key="$1"
-    local value="$2"
-
-    if [[ ! -f "$SETTINGS_FILE" ]]; then
-        echo '{}' > "$SETTINGS_FILE"
-        chmod 600 "$SETTINGS_FILE"
+prepare_mihomo_candidate() {
+  local stage="$1" json="$1/mihomo-release.json" has_current=false
+  [[ -x "$stage/mihomo" ]] && has_current=true
+  print_step "Проверка обновлений ядра Mihomo..."
+  if ! download_with_retry "$MIHOMO_RELEASES_API" "$json" ||
+     ! jq -e '.tag_name and (.assets | type == "array")' "$json" >/dev/null; then
+    if $has_current; then
+      print_warning "Релиз недоступен; остаётся текущее ядро"; return 0
     fi
-
-    local tmp
-    tmp=$(jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$SETTINGS_FILE")
-    echo "$tmp" > "${SETTINGS_FILE}.tmp"
-    mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+    print_error "Не удалось получить релиз Mihomo"; return 1
+  fi
+  local version arch asset archive current
+  version=$(jq -r .tag_name "$json"); arch=$(detect_arch) || return 1
+  if [[ "$arch" == amd64 ]]; then
+    asset="mihomo-linux-amd64-v1-${version}.gz"
+  else
+    asset="mihomo-linux-arm64-${version}.gz"
+  fi
+  current=$(settings_get_from "$stage/settings.json" installed_version)
+  if $has_current && [[ "$current" == "$version" ]]; then
+    print_success "Ядро актуально ($version)"; return 0
+  fi
+  archive="$stage/$asset"; print_step "Скачивание и проверка Mihomo $version..."
+  if ! download_verified_release_asset "$json" "$asset" "$archive"; then
+    if $has_current; then
+      print_warning "Новое ядро не прошло проверку; остаётся текущее"; return 0
+    fi
+    print_error "Ядро не прошло обязательную SHA256-проверку"; return 1
+  fi
+  gzip -t "$archive" 2>/dev/null ||
+    { rm -f "$archive"; print_error "Архив Mihomo повреждён"; return 1; }
+  gzip -dc "$archive" > "$stage/mihomo.new"
+  chmod 755 "$stage/mihomo.new"; mv "$stage/mihomo.new" "$stage/mihomo"; rm -f "$archive"
+  settings_set_in "$stage/settings.json" installed_version "$version"
+  print_success "Mihomo $version подготовлен"
 }
 
-read_settings() {
-    local key="$1"
-    if [[ -f "$SETTINGS_FILE" ]]; then
-        jq -r --arg k "$key" '.[$k] // ""' "$SETTINGS_FILE" 2>/dev/null
+prepare_profile_candidate() {
+  local stage="$1" url="$2" has_current=false raw allowed=""
+  [[ -s "$stage/config.yaml" ]] && has_current=true
+  if [[ -z "$url" ]] || ! validate_url "$url"; then
+    if $has_current; then
+      print_warning "URL подписки не принят; профиль не изменён"
+      PROXY_PORT=$(get_proxy_port_from "$stage/config.yaml"); return 0
     fi
+    print_error "Публичная подписка должна использовать HTTPS"; return 1
+  fi
+  print_step "Скачивание профиля..."; raw="$stage/config.download"
+  if ! download_with_retry "$url" "$raw" || ! validate_yaml "$raw"; then
+    rm -f "$raw"
+    if $has_current; then
+      print_warning "Новый профиль недоступен или повреждён; остаётся текущий"
+      PROXY_PORT=$(get_proxy_port_from "$stage/config.yaml"); return 0
+    fi
+    print_error "Не удалось получить корректный профиль"; return 1
+  fi
+  mv "$raw" "$stage/config.yaml"
+  if systemctl is-active --quiet dostup 2>/dev/null && [[ -f "$CONFIG_FILE" ]]; then
+    allowed=$(get_proxy_port)
+  fi
+  process_config "$stage/config.yaml" "$allowed"
+  settings_set_in "$stage/settings.json" subscription_url "$url"
+  settings_set_in "$stage/settings.json" proxy_port "$PROXY_PORT"
+  print_success "Профиль подготовлен (порт: $PROXY_PORT)"
 }
 
-# --- Скачивание mihomo ---
-download_mihomo() {
-    local arch
-    arch=$(detect_arch)
+geo_update_due() {
+  local last ts now
+  last=$(settings_get_from "$1" last_geo_update)
+  [[ -n "$last" ]] || return 0
+  ts=$(date -d "$last" +%s 2>/dev/null || echo 0); now=$(date +%s)
+  (( (now - ts) / 86400 >= 14 ))
+}
+prepare_geo_candidate() {
+  local stage="$1" json="$1/geo-release.json" tmp="$1/geo-downloads"
+  geo_update_due "$stage/settings.json" || return 0
+  print_step "Скачивание и проверка GeoIP, GeoSite и ASN..."
+  if ! download_with_retry "$GEO_RELEASES_API" "$json" ||
+     ! jq -e '.assets | type == "array"' "$json" >/dev/null; then
+    print_warning "Geo-базы недоступны; сохраняются текущие"; return 0
+  fi
+  mkdir -p "$tmp"
+  if download_verified_release_asset "$json" geoip.dat "$tmp/GeoIP.dat" &&
+     download_verified_release_asset "$json" geosite.dat "$tmp/GeoSite.dat" &&
+     download_verified_release_asset "$json" GeoLite2-ASN.mmdb "$tmp/ASN.mmdb"; then
+    mv "$tmp/GeoIP.dat" "$stage/GeoIP.dat"
+    mv "$tmp/GeoSite.dat" "$stage/GeoSite.dat"
+    mv "$tmp/ASN.mmdb" "$stage/ASN.mmdb"
+    settings_set_in "$stage/settings.json" last_geo_update "$(date +%Y-%m-%d)"
+    print_success "Geo-базы проверены"
+  else
+    print_warning "Geo-базы не прошли полную SHA256-проверку; сохраняются текущие"
+  fi
+  rm -rf "$tmp"
+}
 
-    print_step "Получение последней версии mihomo..."
-    local version
-    version=$(get_latest_version)
+prepare_runtime_for_test() {
+  local stage="$1" runtime="$1/runtime" name dir
+  mkdir -p "$runtime"
+  for name in GeoIP.dat GeoSite.dat ASN.mmdb geoip.dat geosite.dat \
+    geoip.metadb country.mmdb cache.db; do
+    copy_if_present "$stage/$name" "$runtime/$name"
+  done
+  for dir in proxies rules; do
+    [[ -d "$DOSTUP_DIR/$dir" ]] && cp -aL "$DOSTUP_DIR/$dir" "$runtime/$dir"
+  done
+  return 0
+}
+validate_candidate_with_mihomo() {
+  local stage="$1"
+  [[ -x "$stage/mihomo" && -s "$stage/config.yaml" ]] ||
+    { print_error "Кандидат неполный: нет ядра или профиля"; return 1; }
+  prepare_runtime_for_test "$stage"; print_step "Проверка через mihomo -t..."
+  if ! "$stage/mihomo" -t -d "$stage/runtime" -f "$stage/config.yaml" \
+    >"$stage/mihomo-test.log" 2>&1; then
+    print_error "Mihomo отклонил профиль; текущая установка не изменена"
+    tail -n 20 "$stage/mihomo-test.log" >&2 || true; return 1
+  fi
+  copy_if_present "$stage/runtime/cache.db" "$stage/cache.db"
+  print_success "Ядро и профиль совместимы"
+}
 
-    if [[ -z "$version" || "$version" == "null" ]]; then
-        print_error "Не удалось получить версию mihomo"
-        return 1
-    fi
-
-    print_step "Скачивание mihomo $version для $arch..."
-
-    local filename="mihomo-linux-${arch}-${version}.gz"
-    local download_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}"
-
-    if ! download_with_retry "$download_url" "$DOSTUP_DIR/mihomo.gz"; then
-        print_error "Не удалось скачать mihomo"
-        return 1
-    fi
-
-    # Проверка SHA256
-    print_step "Проверка целостности файла..."
-    local checksum_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}.sha256"
-    local expected_hash
-    expected_hash=$(curl -sL --fail "$checksum_url" 2>/dev/null | awk '{print $1}')
-
-    if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ ]]; then
-        local actual_hash
-        actual_hash=$(sha256sum "$DOSTUP_DIR/mihomo.gz" | awk '{print $1}')
-        if [[ "$expected_hash" != "$actual_hash" ]]; then
-            print_error "Ошибка проверки хэша! Файл повреждён."
-            rm -f "$DOSTUP_DIR/mihomo.gz"
-            return 1
-        fi
-        print_success "Хэш совпадает"
+extract_installer_release() {
+  local tag
+  tag=$(jq -r '[.[] | select(.draft == false and .prerelease == false and
+    (.tag_name | startswith("installer-v")))][0].tag_name // empty' "$1") || return 1
+  [[ -n "$tag" ]] || return 1
+  jq --arg t "$tag" '[.[] | select(.tag_name == $t)][0]' "$1" > "$2"
+  STAGED_INSTALLER_VERSION="$tag"
+}
+prepare_manager_candidate() {
+  local stage="$1" list="$1/installer-releases.json" release="$1/installer-release.json"
+  local current source="${BASH_SOURCE[0]}"
+  current=$(settings_get_from "$stage/settings.json" installer_version)
+  if download_with_retry "$INSTALLER_RELEASES_API" "$list" &&
+     extract_installer_release "$list" "$release"; then
+    if [[ "$current" != "$STAGED_INSTALLER_VERSION" ||
+          ! -s "$stage/dostup-manager.sh" ]]; then
+      if download_verified_release_asset "$release" dostup-install.sh "$stage/manager.new" &&
+         bash -n "$stage/manager.new"; then
+        chmod 755 "$stage/manager.new"
+        mv "$stage/manager.new" "$stage/dostup-manager.sh"
+        settings_set_in "$stage/settings.json" installer_version "$STAGED_INSTALLER_VERSION"
+        print_success "Установщик $STAGED_INSTALLER_VERSION проверен по release digest"
+        return 0
+      fi
+      rm -f "$stage/manager.new"; print_warning "Релиз установщика отклонён"
     else
-        print_info "SHA256 не найден, пропуск проверки"
+      return 0
     fi
-
-    # Распаковка
-    gunzip -f "$DOSTUP_DIR/mihomo.gz"
-    chmod +x "$MIHOMO_BIN"
-
-    # Сохраняем версию
-    update_settings "installed_version" "$version"
-
-    print_success "Mihomo $version установлен"
-}
-
-# --- Запрос URL подписки ---
-# Результат в глобальной переменной SUB_URL
-ask_subscription_url() {
-    local old_url="$1"
-
-    if [[ -n "$old_url" ]]; then
-        print_info "Найдена предыдущая подписка"
-        echo ""
-        echo "1) Оставить текущую подписку"
-        echo "2) Ввести новую подписку"
-        echo ""
-        read -p "Выберите (1 или 2): " choice
-
-        if [[ "$choice" == "2" ]]; then
-            read -p "Введите URL подписки (конфига): " SUB_URL
-        else
-            SUB_URL="$old_url"
-            print_success "Используется предыдущая подписка"
-        fi
-    else
-        read -p "Введите URL подписки (конфига): " SUB_URL
-    fi
-}
-
-# --- Скачивание конфига ---
-download_config() {
-    local url="$1"
-    print_step "Скачивание конфига..."
-
-    # Бэкап старого конфига
-    [[ -f "$CONFIG_FILE" ]] && cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
-
-    local temp_config="${CONFIG_FILE}.tmp"
-    if ! download_with_retry "$url" "$temp_config"; then
-        print_error "Не удалось скачать конфиг"
-        [[ -f "${CONFIG_FILE}.bak" ]] && mv "${CONFIG_FILE}.bak" "$CONFIG_FILE"
-        return 1
-    fi
-
-    if ! validate_yaml "$temp_config"; then
-        print_error "Скачанный конфиг не является валидным YAML"
-        rm -f "$temp_config"
-        [[ -f "${CONFIG_FILE}.bak" ]] && mv "${CONFIG_FILE}.bak" "$CONFIG_FILE"
-        return 1
-    fi
-
-    mv "$temp_config" "$CONFIG_FILE"
-    print_success "Конфиг скачан и проверен"
+  fi
+  if [[ -f "$source" && -r "$source" ]] && bash -n "$source"; then
+    cp "$source" "$stage/dostup-manager.sh"; chmod 755 "$stage/dostup-manager.sh"
+    settings_set_in "$stage/settings.json" installer_version \
+      "${current:-$INSTALLER_BUILD_VERSION}"
     return 0
-}
-
-# --- Скачивание geo-баз ---
-download_geo() {
-    print_step "Скачивание geo-баз..."
-    local geoip_ok=true
-    local geosite_ok=true
-
-    download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat" || geoip_ok=false
-    download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat" || geosite_ok=false
-
-    if $geoip_ok && $geosite_ok; then
-        update_settings "last_geo_update" "$(date +%Y-%m-%d)"
-        print_success "Geo-базы скачаны"
-    else
-        print_warning "Geo-базы скачаны не полностью"
-    fi
-
+  fi
+  [[ -s "$stage/dostup-manager.sh" ]] && return 0
+  # Временная ветка до публикации первого installer-v release.
+  print_warning "Installer release ещё не опубликован; используется dev bootstrap"
+  if download_with_retry "$INSTALLER_RAW_URL" "$stage/manager.new" &&
+     bash -n "$stage/manager.new"; then
+    chmod 755 "$stage/manager.new"; mv "$stage/manager.new" "$stage/dostup-manager.sh"
+    settings_set_in "$stage/settings.json" installer_version dev-unverified
     return 0
+  fi
+  print_error "Не удалось подготовить менеджер Dostup"; return 1
 }
 
-# --- Создание sites.json ---
-create_sites_json() {
-    local sites_file="$DOSTUP_DIR/sites.json"
-    if [[ ! -f "$sites_file" ]]; then
-        cat > "$sites_file" << 'EOF'
-{
-  "sites": [
-    "instagram.com",
-    "youtube.com",
-    "facebook.com",
-    "rutracker.org",
-    "hdrezka.ag",
-    "flibusta.is"
-  ]
-}
+create_sites_candidate() {
+  [[ -s "$1/sites.json" ]] && return 0
+  cat > "$1/sites.json" <<'EOF'
+{"sites":["instagram.com","youtube.com","facebook.com","rutracker.org","hdrezka.ag","flibusta.is"]}
 EOF
-    fi
 }
-
-# --- Установка systemd-сервиса ---
-install_service() {
-    print_step "Установка systemd-сервиса..."
-
-    cat > "$SERVICE_FILE" << 'EOF'
+render_service_candidate() {
+  cat > "$1" <<'EOF'
 [Unit]
 Description=Dostup VPN (Mihomo)
 After=network-online.target
@@ -437,7 +483,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/dostup/mihomo -f /opt/dostup/config.yaml
+ExecStart=/opt/dostup/mihomo -d /opt/dostup -f /opt/dostup/config.yaml
 Restart=on-failure
 RestartSec=3
 User=root
@@ -447,730 +493,373 @@ WorkingDirectory=/opt/dostup
 [Install]
 WantedBy=multi-user.target
 EOF
-
-    systemctl daemon-reload
-    systemctl enable dostup >/dev/null 2>&1
-    print_success "Сервис установлен и включён в автозагрузку"
+}
+render_cli_candidate() {
+  cat > "$1" <<'EOF'
+#!/usr/bin/env bash
+exec /opt/dostup/dostup-manager.sh --cli "$@"
+EOF
+  chmod 755 "$1"
 }
 
-# --- Установка CLI-обёртки dostup ---
-install_cli() {
-    print_step "Установка CLI-обёртки dostup..."
-
-    cat > "$CLI_PATH" << 'ENDOFCLI'
-#!/bin/bash
-# ============================================
-# Dostup VPN CLI
-# Управление прокси-сервером Mihomo
-# ============================================
-
-DOSTUP_DIR="/opt/dostup"
-CONFIG_FILE="$DOSTUP_DIR/config.yaml"
-SETTINGS_FILE="$DOSTUP_DIR/settings.json"
-MIHOMO_BIN="$DOSTUP_DIR/mihomo"
-SITES_FILE="$DOSTUP_DIR/sites.json"
-
-MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
-GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
-GEOSITE_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-print_step()    { echo -e "${YELLOW}▶ $1${NC}"; }
-print_success() { echo -e "${GREEN}✓ $1${NC}"; }
-print_error()   { echo -e "${RED}✗ $1${NC}"; }
-print_info()    { echo -e "${BLUE}ℹ $1${NC}"; }
-print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
-
-require_root() {
-    if [[ $EUID -ne 0 ]]; then
-        print_error "Требуется root. Используйте: sudo dostup $1"
-        exit 1
+snapshot_live_files() {
+  mkdir -p "$1"; : > "$1/manifest"; local name
+  for name in "${MANAGED_FILES[@]}"; do
+    if [[ -e "$DOSTUP_DIR/$name" ]]; then
+      cp -aL "$DOSTUP_DIR/$name" "$1/$name"
+      printf '%s\n' "$name" >> "$1/manifest"
     fi
+  done
 }
-
-# NOTE: Duplicated from installer. Keep in sync.
-read_settings() {
-    local key="$1"
-    if [[ -f "$SETTINGS_FILE" ]]; then
-        jq -r --arg k "$key" '.[$k] // ""' "$SETTINGS_FILE" 2>/dev/null
-    fi
+mode_for_file() {
+  case "$1" in
+    mihomo|dostup-manager.sh) echo 755 ;;
+    settings.json) echo 600 ;;
+    config.yaml) echo 644 ;;
+    *) echo 644 ;;
+  esac
 }
-
-# NOTE: Duplicated from installer. Keep in sync.
-update_settings() {
-    local key="$1"
-    local value="$2"
-    if [[ ! -f "$SETTINGS_FILE" ]]; then
-        echo '{}' > "$SETTINGS_FILE"
-        chmod 600 "$SETTINGS_FILE"
-    fi
-    local tmp
-    tmp=$(jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$SETTINGS_FILE")
-    echo "$tmp" > "${SETTINGS_FILE}.tmp"
-    mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+install_file_atomically() {
+  local tmp="${2}.new.$$"
+  install -m "$3" "$1" "$tmp"; mv -f "$tmp" "$2"
 }
-
-# NOTE: Duplicated from installer. Keep in sync.
-download_with_retry() {
-    local url="$1"
-    local output="$2"
-    local retry=0
-    while [[ $retry -lt 3 ]]; do
-        if curl -fL -4 --connect-timeout 10 --max-time 120 -s -o "$output" "$url" 2>/dev/null && [[ -s "$output" ]]; then
-            return 0
-        fi
-        retry=$((retry + 1))
-        print_info "Повтор ($retry/3)..."
-        sleep 2
-    done
-    return 1
-}
-
-# NOTE: Duplicated from installer. Keep in sync.
-verify_mihomo_checksum() {
-    local version="$1"
-    local filename="$2"
-    local archive="$3"
-    local checksum_url="https://github.com/MetaCubeX/mihomo/releases/download/${version}/${filename}.sha256"
-    local expected_hash
-    expected_hash=$(curl -sL --fail "$checksum_url" 2>/dev/null | awk '{print $1}')
-
-    if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ ]]; then
-        local actual_hash
-        actual_hash=$(sha256sum "$archive" | awk '{print $1}')
-        [[ "$expected_hash" == "$actual_hash" ]]
+restore_live_files() {
+  local name mode
+  for name in "${MANAGED_FILES[@]}"; do
+    if grep -Fxq "$name" "$1/manifest" 2>/dev/null; then
+      mode=$(mode_for_file "$name")
+      install_file_atomically "$1/$name" "$DOSTUP_DIR/$name" "$mode"
     else
-        print_info "SHA256 не найден, пропуск проверки"
+      rm -f "$DOSTUP_DIR/$name"
+    fi
+  done
+}
+publish_known_good() {
+  local old="$DOSTUP_DIR/.known-good.previous.$$"
+  rm -rf "$old"
+  [[ -d "$KNOWN_GOOD_DIR" ]] && mv "$KNOWN_GOOD_DIR" "$old"
+  if mv "$1" "$KNOWN_GOOD_DIR"; then rm -rf "$old"; return 0; fi
+  [[ -d "$old" ]] && mv "$old" "$KNOWN_GOOD_DIR"
+  return 1
+}
+get_external_controller() {
+  local value
+  value=$(awk '/^external-controller:[[:space:]]+/ {
+    sub(/^[^:]+:[[:space:]]+/, ""); gsub(/['\''"]/, ""); print; exit }' "$1" ||
+    true)
+  case "$value" in
+    0.0.0.0:*) echo "127.0.0.1:${value##*:}" ;;
+    127.0.0.1:*|localhost:*) echo "$value" ;;
+    *) echo "" ;;
+  esac
+}
+listener_owned_by_service() {
+  local pid
+  pid=$(systemctl show dostup -p MainPID --value 2>/dev/null || true)
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  ss -H -ltnp 2>/dev/null | awk -v p="$1" -v n="pid=$pid," \
+    '$4 ~ (":" p "$") && index($0,n) { f=1 } END { exit !f }'
+}
+hard_healthcheck() {
+  local port controller attempt
+  port=$(get_proxy_port); controller=$(get_external_controller "$CONFIG_FILE")
+  for attempt in {1..12}; do
+    if systemctl is-active --quiet dostup && listener_owned_by_service "$port"; then
+      if [[ -z "$controller" ]] || curl -sS --connect-timeout 2 --max-time 3 \
+        -o /dev/null "http://$controller/version" 2>/dev/null; then
         return 0
+      fi
     fi
+    sleep 1
+  done
+  return 1
 }
-
-# NOTE: Duplicated from installer. Keep in sync.
-validate_yaml() {
-    local content
-    content=$(cat "$1" 2>/dev/null)
-    ! echo "$content" | head -c 1000 | grep -qiE '<!DOCTYPE|<html|<head' \
-        && echo "$content" | grep -qE '^[a-zA-Z_-]+:' \
-        && echo "$content" | grep -qE '^mixed-port:'
+soft_post_update_check() {
+  local port
+  port=$(get_proxy_port)
+  curl -x "http://127.0.0.1:$port" -sS -o /dev/null --connect-timeout 5 \
+    --max-time 10 https://www.gstatic.com/generate_204 2>/dev/null || {
+      print_warning "Сервис исправен, но внешняя проверка через прокси не прошла"
+      print_info "Rollback не выполняется; проверьте ноды: dostup healthcheck"
+    }
 }
-
-# NOTE: Duplicated from installer. Keep in sync.
-check_port_free() {
-    ! ss -tlnp 2>/dev/null | grep -qE ":${1}\b"
-}
-
-# NOTE: Duplicated from installer. Keep in sync.
-find_free_port() {
-    local port="$1"
-    while ! check_port_free "$port"; do
-        port=$((port + 1))
-        if [[ $port -gt 65535 ]]; then
-            print_error "Не удалось найти свободный порт" >&2
-            return 1
-        fi
-    done
-    echo "$port"
-}
-
-# NOTE: Duplicated from installer (returns port via echo, installer uses global var). Keep in sync.
-process_config() {
-    local config="$1"
-    local temp="${config}.processing"
-
-    sed '/^external-ui:/d; /^external-ui-url:/d' "$config" > "$temp"
-    awk 'BEGIN{s=0} /^tun:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
-    awk 'BEGIN{s=0} /^rule-providers:/{s=1;next} s==1&&/^[^ \t]/{s=0} s==0{print}' "$temp" > "${temp}.2" && mv "${temp}.2" "$temp"
-
-    sed -i '/RULE-SET/d' "$temp"
-
-    # Финальное правило всегда направляем в Auto Select
-    sed -i -E 's/^([[:space:]]*)- MATCH,.*/\1- MATCH,Auto Select/' "$temp"
-
-    sed -i 's/listen: 0\.0\.0\.0:53/listen: 127.0.0.1:1053/' "$temp"
-
-    # Безопасный bind: external-controller только на loopback
-    sed -i -E "s/^(external-controller:[[:space:]]*)['\"]?0\.0\.0\.0:([0-9]+)['\"]?(.*)$/\1'127.0.0.1:\2'\3/" "$temp"
-
-    local port desired_port=7890
-    port=$(grep -oP 'mixed-port:\s*\K\d+' "$temp" 2>/dev/null || echo "7890")
-    if [[ "$port" != "$desired_port" ]]; then
-        sed -i "s/mixed-port: $port/mixed-port: $desired_port/" "$temp"
-        port="$desired_port"
+merge_runtime_cache() {
+  local dir
+  for dir in proxies rules; do
+    if [[ -d "$1/$dir" ]]; then
+      mkdir -p "$DOSTUP_DIR/$dir"
+      cp -aL "$1/$dir/." "$DOSTUP_DIR/$dir/"
     fi
-    if ! check_port_free "$port"; then
-        local new_port
-        new_port=$(find_free_port "$port")
-        sed -i "s/mixed-port: $port/mixed-port: $new_port/" "$temp"
-        print_warning "Порт $port занят, используется $new_port" >&2
-        port="$new_port"
+  done
+}
+
+commit_candidate() {
+  local stage="$1" had_previous=false was_active=false name mode
+  [[ -x "$MIHOMO_BIN" && -s "$CONFIG_FILE" ]] && had_previous=true
+  systemctl is-active --quiet dostup 2>/dev/null && was_active=true
+  mkdir -p "$stage/previous"; snapshot_live_files "$stage/previous/live"
+  [[ -f "$SERVICE_FILE" ]] && cp -aL "$SERVICE_FILE" "$stage/previous/service"
+  [[ -f "$CLI_PATH" ]] && cp -aL "$CLI_PATH" "$stage/previous/cli"
+  render_service_candidate "$stage/service"; render_cli_candidate "$stage/cli"
+
+  print_step "Короткая остановка для атомарной подмены..."
+  systemctl stop dostup 2>/dev/null || true
+  for name in "${MANAGED_FILES[@]}"; do
+    if [[ -e "$stage/$name" ]]; then
+      mode=$(mode_for_file "$name")
+      install_file_atomically "$stage/$name" "$DOSTUP_DIR/$name" "$mode"
     fi
+  done
+  merge_runtime_cache "$stage/runtime"
+  install_file_atomically "$stage/service" "$SERVICE_FILE" 644
+  install_file_atomically "$stage/cli" "$CLI_PATH" 755
+  systemctl daemon-reload
+  systemctl enable dostup >/dev/null 2>&1
+  systemctl start dostup
 
-    mv "$temp" "$config"
-    echo "$port"
+  if ! hard_healthcheck; then
+    print_error "Новая версия локально неисправна; выполняется rollback"
+    systemctl stop dostup 2>/dev/null || true
+    restore_live_files "$stage/previous/live"
+    if [[ -f "$stage/previous/service" ]]; then
+      install_file_atomically "$stage/previous/service" "$SERVICE_FILE" 644
+    else
+      rm -f "$SERVICE_FILE"
+    fi
+    if [[ -f "$stage/previous/cli" ]]; then
+      install_file_atomically "$stage/previous/cli" "$CLI_PATH" 755
+    else
+      rm -f "$CLI_PATH"
+    fi
+    systemctl daemon-reload
+    if $was_active; then
+      systemctl start dostup
+      if hard_healthcheck; then
+        print_success "Предыдущая версия восстановлена"
+      else
+        print_error "Предыдущая версия восстановлена, но сервис не запустился"
+      fi
+    elif ! $had_previous; then
+      systemctl disable dostup >/dev/null 2>&1 || true
+    fi
+    return 1
+  fi
+
+  if $had_previous && ! publish_known_good "$stage/previous/live"; then
+    print_warning "Не удалось обновить known-good резерв"
+  fi
+  print_success "Новая версия запущена и прошла локальную проверку"
+  soft_post_update_check
+}
+prepare_and_commit() {
+  local stage
+  stage=$(create_stage); ACTIVE_STAGE="$stage"
+  seed_candidate "$stage"
+  prepare_mihomo_candidate "$stage" || return 1
+  prepare_profile_candidate "$stage" "$1" || return 1
+  prepare_geo_candidate "$stage"
+  prepare_manager_candidate "$stage" || return 1
+  create_sites_candidate "$stage"
+  validate_candidate_with_mihomo "$stage" || return 1
+  commit_candidate "$stage" || return 1
+  rm -rf "$stage"; ACTIVE_STAGE=""
 }
 
-get_proxy_port() {
-    grep -oP 'mixed-port:\s*\K\d+' "$CONFIG_FILE" 2>/dev/null || echo "7890"
+ask_subscription_url() {
+  local choice
+  if [[ -n "$1" ]]; then
+    print_info "Найдена предыдущая подписка"
+    echo; echo "1) Оставить текущую подписку"; echo "2) Ввести новую подписку"; echo
+    read -r -p "Выберите (1 или 2): " choice
+    if [[ "$choice" == 2 ]]; then
+      read -r -p "Введите URL подписки (конфига): " SUB_URL
+    else
+      SUB_URL="$1"; print_success "Используется предыдущая подписка"
+    fi
+  else
+    read -r -p "Введите URL подписки (конфига): " SUB_URL
+  fi
 }
-
-# === Команды ===
+show_result() {
+  echo; echo -e "${GREEN}════════════════════════════════════════════${NC}"
+  echo -e "${GREEN}  ✓ Dostup VPN установлен и запущен${NC}"
+  echo -e "${GREEN}════════════════════════════════════════════${NC}"; echo
+  echo "  Прокси:        http://127.0.0.1:$1"
+  echo "  Статус:        sudo dostup status"
+  echo "  Управление:    sudo dostup start|stop|restart"
+  echo "  Откат:         sudo dostup rollback"
+  echo "  Проверка:      dostup check"
+  echo "  Логи:          dostup log"; echo
+}
+installer_main() {
+  echo; echo -e "${BLUE}============================================${NC}"
+  echo -e "${BLUE}       Dostup Installer for Mihomo${NC}"
+  echo -e "${BLUE}         Linux (Ubuntu / Debian)${NC}"
+  echo -e "${BLUE}============================================${NC}"; echo
+  check_paths; check_root; check_os
+  install_lock_dependency; acquire_lock; install_dependencies; check_internet
+  mkdir -p "$DOSTUP_DIR"; chmod 755 "$DOSTUP_DIR"; migrate_legacy_runtime
+  local old=""
+  command -v jq >/dev/null 2>&1 && old=$(read_settings subscription_url)
+  print_step "Настройка подписки..."; ask_subscription_url "$old"
+  [[ -n "$SUB_URL" || -s "$CONFIG_FILE" ]] ||
+    { print_error "URL подписки не указан"; return 1; }
+  prepare_and_commit "$SUB_URL"
+  show_result "$(get_proxy_port)"
+}
 
 do_start() {
-    require_root "start"
-    if systemctl is-active --quiet dostup; then
-        print_info "Dostup уже запущен"
-        return 0
-    fi
-    systemctl start dostup
-    sleep 1
-    if systemctl is-active --quiet dostup; then
-        local port
-        port=$(get_proxy_port)
-        print_success "Dostup запущен (прокси: http://127.0.0.1:$port)"
-    else
-        print_error "Не удалось запустить Dostup"
-        echo "Проверьте логи: journalctl -u dostup -n 20"
-        return 1
-    fi
+  require_root start; acquire_lock
+  systemctl is-active --quiet dostup &&
+    { print_info "Dostup уже запущен"; return 0; }
+  systemctl start dostup
+  if hard_healthcheck; then
+    print_success "Dostup запущен (http://127.0.0.1:$(get_proxy_port))"
+  else
+    print_error "Не удалось запустить Dostup"; return 1
+  fi
 }
-
 do_stop() {
-    require_root "stop"
-    if ! systemctl is-active --quiet dostup; then
-        print_info "Dostup уже остановлен"
-        return 0
-    fi
-    systemctl stop dostup
-    print_success "Dostup остановлен"
+  require_root stop; acquire_lock
+  systemctl is-active --quiet dostup ||
+    { print_info "Dostup уже остановлен"; return 0; }
+  systemctl stop dostup; print_success "Dostup остановлен"
 }
-
-check_script_update() {
-    local current_hash
-    current_hash=$(read_settings "installer_hash")
-    [[ -z "$current_hash" ]] && return 0
-
-    local url="https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh"
-    # Уникальное имя по pid, чтобы параллельные запуски не топтали друг друга.
-    local tmp="/tmp/dostup-installer-check.$$"
-    if curl -sL -4 --connect-timeout 10 --max-time 30 "$url" -o "$tmp" 2>/dev/null; then
-        local new_hash
-        new_hash=$(sha256sum "$tmp" 2>/dev/null | cut -d' ' -f1)
-        if [[ -n "$new_hash" && "$new_hash" != "$current_hash" ]]; then
-            echo ""
-            echo -e "${YELLOW}▶ Доступно обновление скрипта управления${NC}"
-            printf "  Обновить сейчас? (y/N): "
-            read -r choice
-            if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-                echo -e "${YELLOW}▶ Обновление...${NC}"
-                sudo bash "$tmp"
-                rm -f "$tmp"
-                exit 0
-            fi
-        fi
-    fi
-    rm -f "$tmp"
-}
-
 do_update() {
-    require_root "restart"
-    check_script_update
-
-    # Останавливаем сервис до обновления, чтобы освободить порт
-    systemctl stop dostup 2>/dev/null || true
-
-    # 1. Проверка обновления ядра
-    print_step "Проверка обновлений ядра..."
-    local current_version
-    current_version=$(read_settings "installed_version")
-    local latest_version
-    latest_version=$(curl -s -4 --connect-timeout 10 --max-time 30 "$MIHOMO_RELEASES_API" | jq -r '.tag_name' 2>/dev/null)
-
-    if [[ -n "$latest_version" && "$latest_version" != "null" && "$current_version" != "$latest_version" ]]; then
-        print_step "Обновление ядра: $current_version → $latest_version"
-        local arch
-        arch=$(uname -m)
-        case "$arch" in
-            x86_64)  arch="amd64" ;;
-            aarch64) arch="arm64" ;;
-            *)
-                print_error "Неподдерживаемая архитектура: $arch"
-                return 1
-                ;;
-        esac
-        local filename="mihomo-linux-${arch}-${latest_version}.gz"
-        local url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/${filename}"
-
-        if download_with_retry "$url" "$DOSTUP_DIR/mihomo.gz"; then
-            if verify_mihomo_checksum "$latest_version" "$filename" "$DOSTUP_DIR/mihomo.gz"; then
-                gunzip -f "$DOSTUP_DIR/mihomo.gz"
-                chmod +x "$MIHOMO_BIN"
-                update_settings "installed_version" "$latest_version"
-                print_success "Ядро обновлено до $latest_version"
-            else
-                rm -f "$DOSTUP_DIR/mihomo.gz"
-                print_error "Ошибка проверки хэша! Используем текущую версию"
-            fi
-        else
-            print_error "Не удалось обновить ядро, используем текущую версию"
-        fi
-    else
-        print_success "Ядро актуально ($current_version)"
-    fi
-
-    # 2. Обновление конфига
-    print_step "Обновление конфига..."
-    local sub_url
-    sub_url=$(read_settings "subscription_url")
-    if [[ -n "$sub_url" ]]; then
-        [[ -f "$CONFIG_FILE" ]] && cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
-        local temp_config="${CONFIG_FILE}.tmp"
-        if download_with_retry "$sub_url" "$temp_config"; then
-            if validate_yaml "$temp_config"; then
-                mv "$temp_config" "$CONFIG_FILE"
-                local port
-                port=$(process_config "$CONFIG_FILE")
-                update_settings "proxy_port" "$port"
-                print_success "Конфиг обновлён (порт: $port)"
-            else
-                print_error "Конфиг невалидный, используем старый"
-                rm -f "$temp_config"
-                [[ -f "${CONFIG_FILE}.bak" ]] && mv "${CONFIG_FILE}.bak" "$CONFIG_FILE"
-            fi
-        else
-            print_error "Не удалось скачать конфиг, используем старый"
-            [[ -f "${CONFIG_FILE}.bak" ]] && mv "${CONFIG_FILE}.bak" "$CONFIG_FILE"
-        fi
-    else
-        print_error "URL подписки не задан"
-    fi
-
-    # 3. Обновление geo-баз (раз в 14 дней)
-    local should_update_geo=false
-    local last_geo
-    last_geo=$(read_settings "last_geo_update")
-    if [[ -n "$last_geo" ]]; then
-        local last_ts now_ts diff_days
-        last_ts=$(date -d "$last_geo" +%s 2>/dev/null || echo 0)
-        now_ts=$(date +%s)
-        diff_days=$(( (now_ts - last_ts) / 86400 ))
-        [[ $diff_days -ge 14 ]] && should_update_geo=true
-    else
-        should_update_geo=true
-    fi
-
-    if $should_update_geo; then
-        print_step "Обновление geo-баз..."
-        local geo_ok=true
-        download_with_retry "$GEOIP_URL" "$DOSTUP_DIR/geoip.dat" || geo_ok=false
-        download_with_retry "$GEOSITE_URL" "$DOSTUP_DIR/geosite.dat" || geo_ok=false
-        if $geo_ok; then
-            update_settings "last_geo_update" "$(date +%Y-%m-%d)"
-            print_success "Geo-базы обновлены"
-        fi
-    fi
-
-    # 4. Запуск (сервис уже остановлен в начале do_update)
-    systemctl start dostup
-    sleep 1
-    if systemctl is-active --quiet dostup; then
-        local port
-        port=$(get_proxy_port)
-        print_success "Dostup перезапущен (прокси: http://127.0.0.1:$port)"
-    else
-        print_error "Не удалось запустить Dostup"
-        echo "Проверьте логи: journalctl -u dostup -n 20"
-        return 1
-    fi
+  require_root update; acquire_lock; install_dependencies; migrate_legacy_runtime
+  prepare_and_commit "$(read_settings subscription_url)"
+  print_success "Обновление завершено"
 }
-
 do_status() {
-    echo ""
-    if systemctl is-active --quiet dostup; then
-        local port version pid uptime_info
-        port=$(get_proxy_port)
-        version=$(read_settings "installed_version")
-        pid=$(systemctl show dostup -p MainPID --value 2>/dev/null)
-        uptime_info=$(systemctl show dostup -p ActiveEnterTimestamp --value 2>/dev/null)
-
-        echo -e "${GREEN}● Dostup VPN — активен${NC}"
-        echo ""
-        echo "  Прокси:   http://127.0.0.1:$port"
-        echo "  Версия:   $version"
-        echo "  PID:      $pid"
-        echo "  Запущен:  $uptime_info"
-    else
-        echo -e "${RED}● Dostup VPN — остановлен${NC}"
-    fi
-    echo ""
+  echo
+  if systemctl is-active --quiet dostup; then
+    echo -e "${GREEN}● Dostup VPN — активен${NC}"; echo
+    echo "  Прокси:       http://127.0.0.1:$(get_proxy_port)"
+    echo "  Mihomo:       $(read_settings installed_version)"
+    echo "  Установщик:   $(read_settings installer_version)"
+    echo "  PID:          $(systemctl show dostup -p MainPID --value)"
+    echo "  Запущен:      $(systemctl show dostup -p ActiveEnterTimestamp --value)"
+  else
+    echo -e "${RED}● Dostup VPN — остановлен${NC}"
+  fi
+  echo
 }
-
 do_check() {
-    if ! systemctl is-active --quiet dostup; then
-        print_error "Dostup не запущен. Запустите: sudo dostup start"
-        return 1
+  systemctl is-active --quiet dostup ||
+    { print_error "Dostup не запущен"; return 1; }
+  [[ -f "$SITES_FILE" ]] || { print_error "Файл sites.json не найден"; return 1; }
+  local port proxy site code
+  port=$(get_proxy_port); proxy="http://127.0.0.1:$port"
+  while IFS= read -r site; do
+    code=$(curl -x "$proxy" -s -o /dev/null -w "%{http_code}" --max-time 5 \
+      "https://$site" 2>/dev/null || echo 000)
+    if [[ "$code" -ge 200 && "$code" -lt 400 ]]; then
+      echo -e "  ${GREEN}✓ $site — доступен ($code)${NC}"
+    else
+      echo -e "  ${RED}✗ $site — недоступен ($code)${NC}"
     fi
-
-    if [[ ! -f "$SITES_FILE" ]]; then
-        print_error "Файл sites.json не найден"
-        return 1
-    fi
-
-    local port proxy
-    port=$(get_proxy_port)
-    proxy="http://127.0.0.1:$port"
-
-    echo ""
-    print_step "Проверка доступа через прокси $proxy..."
-    echo ""
-
-    local sites
-    sites=$(jq -r '.sites[]' "$SITES_FILE" 2>/dev/null)
-
-    if [[ -z "$sites" ]]; then
-        print_error "Не удалось прочитать список сайтов"
-        return 1
-    fi
-
-    while IFS= read -r site; do
-        local code
-        code=$(curl -x "$proxy" -s -o /dev/null -w "%{http_code}" --max-time 5 "https://$site" 2>/dev/null || echo "000")
-        if [[ "$code" -ge 200 && "$code" -lt 400 ]]; then
-            echo -e "  ${GREEN}✓ $site — доступен ($code)${NC}"
-        else
-            echo -e "  ${RED}✗ $site — недоступен ($code)${NC}"
-        fi
-    done <<< "$sites"
-    echo ""
+  done < <(jq -r '.sites[]' "$SITES_FILE")
 }
-
-do_log() {
-    journalctl -u dostup -n 50 -f
+controller_api_url() {
+  local controller
+  controller=$(get_external_controller "$CONFIG_FILE")
+  [[ -n "$controller" ]] && echo "http://$controller"
 }
-
-do_uninstall() {
-    require_root "uninstall"
-
-    echo ""
-    read -p "Вы уверены что хотите удалить Dostup VPN? (y/N): " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        echo "Отменено"
-        return 0
-    fi
-
-    print_step "Удаление Dostup VPN..."
-
-    systemctl stop dostup 2>/dev/null || true
-    systemctl disable dostup 2>/dev/null || true
-    rm -f /etc/systemd/system/dostup.service
-    systemctl daemon-reload
-
-    rm -rf /opt/dostup
-    rm -f /usr/local/bin/dostup
-
-    print_success "Dostup VPN полностью удалён"
-}
-
+urlencode() { jq -nr --arg v "$1" '$v | @uri'; }
 do_update_providers() {
-    if ! systemctl is-active --quiet dostup; then
-        print_error "Dostup не запущен. Запустите: sudo dostup start"
-        return 1
-    fi
-
-    echo ""
-    print_step "Обновление провайдеров..."
-
-    local api="http://127.0.0.1:9090"
-
-    # Proxy providers
-    local proxy_providers
-    proxy_providers=$(curl -s --max-time 5 "$api/providers/proxies" | jq -r '.providers | keys[] | select(. != "default")' 2>/dev/null)
-    if [[ -n "$proxy_providers" ]]; then
-        while IFS= read -r name; do
-            if curl -s -X PUT --max-time 15 "$api/providers/proxies/$name" > /dev/null 2>&1; then
-                echo -e "  ${GREEN}✓ Прокси: $name${NC}"
-            else
-                echo -e "  ${RED}✗ Прокси: $name${NC}"
-            fi
-        done <<< "$proxy_providers"
+  require_root update-providers; acquire_lock
+  systemctl is-active --quiet dostup || { print_error "Dostup не запущен"; return 1; }
+  local api providers name encoded
+  api=$(controller_api_url) || { print_error "Локальный API не настроен"; return 1; }
+  providers=$(curl -sS --max-time 5 "$api/providers/proxies" |
+    jq -r '.providers | keys[] | select(. != "default")' 2>/dev/null || true)
+  [[ -n "$providers" ]] || { print_error "Нет прокси-провайдеров"; return 1; }
+  while IFS= read -r name; do
+    encoded=$(urlencode "$name")
+    if curl -sS -X PUT --max-time 15 \
+      "$api/providers/proxies/$encoded" >/dev/null 2>&1; then
+      echo -e "  ${GREEN}✓ Прокси: $name${NC}"
     else
-        print_error "Не удалось получить список прокси-провайдеров"
+      echo -e "  ${RED}✗ Прокси: $name${NC}"
     fi
-
-    # Rule providers
-    local rule_providers
-    rule_providers=$(curl -s --max-time 5 "$api/providers/rules" | jq -r '.providers | keys[]' 2>/dev/null)
-    if [[ -n "$rule_providers" ]]; then
-        while IFS= read -r name; do
-            if curl -s -X PUT --max-time 15 "$api/providers/rules/$name" > /dev/null 2>&1; then
-                echo -e "  ${GREEN}✓ Правила: $name${NC}"
-            else
-                echo -e "  ${RED}✗ Правила: $name${NC}"
-            fi
-        done <<< "$rule_providers"
-    else
-        echo -e "  ${YELLOW}Нет rule-провайдеров${NC}"
-    fi
-
-    echo ""
-    print_success "Обновление завершено"
+  done <<< "$providers"
 }
-
 do_healthcheck() {
-    if ! systemctl is-active --quiet dostup; then
-        print_error "Dostup не запущен. Запустите: sudo dostup start"
-        return 1
-    fi
-
-    echo ""
-    print_step "Проверка нод..."
-    echo ""
-
-    local api="http://127.0.0.1:9090"
-    local proxy_providers
-    proxy_providers=$(curl -s --max-time 5 "$api/providers/proxies" | jq -r '.providers | keys[] | select(. != "default")' 2>/dev/null)
-
-    if [[ -z "$proxy_providers" ]]; then
-        print_error "Не удалось получить список прокси-провайдеров"
-        return 1
-    fi
-
-    while IFS= read -r name; do
-        # Run healthcheck
-        curl -s --max-time 30 "$api/providers/proxies/$name/healthcheck" > /dev/null 2>&1
-        # Get detailed results
-        echo -e "${BLUE}[$name]${NC}"
-        local details
-        details=$(curl -s --max-time 5 "$api/providers/proxies/$name")
-        if [[ -n "$details" ]]; then
-            echo "$details" | jq -r '.proxies[]? | "\(.name)\t\(.history[-1].delay // 0)"' 2>/dev/null | while IFS=$'\t' read -r pname delay; do
-                if [[ "$delay" -gt 0 ]] 2>/dev/null; then
-                    echo -e "  ${GREEN}✓ $pname — ${delay}ms${NC}"
-                else
-                    echo -e "  ${RED}✗ $pname — dead${NC}"
-                fi
-            done
+  systemctl is-active --quiet dostup || { print_error "Dostup не запущен"; return 1; }
+  local api providers name encoded details
+  api=$(controller_api_url) || { print_error "Локальный API не настроен"; return 1; }
+  providers=$(curl -sS --max-time 5 "$api/providers/proxies" |
+    jq -r '.providers | keys[] | select(. != "default")' 2>/dev/null || true)
+  while IFS= read -r name; do
+    encoded=$(urlencode "$name")
+    curl -sS --max-time 30 "$api/providers/proxies/$encoded/healthcheck" \
+      >/dev/null 2>&1 || true
+    echo -e "${BLUE}[$name]${NC}"
+    details=$(curl -sS --max-time 5 "$api/providers/proxies/$encoded" || true)
+    jq -r '.proxies[]? | "\(.name)\t\(.history[-1].delay // 0)"' <<< "$details" |
+      while IFS=$'\t' read -r node delay; do
+        if [[ "$delay" -gt 0 ]] 2>/dev/null; then
+          echo -e "  ${GREEN}✓ $node — ${delay}ms${NC}"
+        else
+          echo -e "  ${RED}✗ $node — dead${NC}"
         fi
-        echo ""
-    done <<< "$proxy_providers"
+      done
+  done <<< "$providers"
 }
-
+do_rollback() {
+  require_root rollback; acquire_lock
+  [[ -f "$KNOWN_GOOD_DIR/manifest" ]] ||
+    { print_error "Known-good резерв ещё не создан"; return 1; }
+  local stage current
+  stage=$(create_stage); ACTIVE_STAGE="$stage"; current="$stage/current"
+  snapshot_live_files "$current"
+  systemctl stop dostup 2>/dev/null || true
+  restore_live_files "$KNOWN_GOOD_DIR"; systemctl start dostup
+  if ! hard_healthcheck; then
+    print_error "Резерв неисправен; возвращается текущая версия"
+    systemctl stop dostup 2>/dev/null || true
+    restore_live_files "$current"; systemctl start dostup
+    hard_healthcheck || true; return 1
+  fi
+  publish_known_good "$current" || print_warning "Не сохранён обратный резерв"
+  rm -rf "$stage"; ACTIVE_STAGE=""; print_success "Откат выполнен"
+}
+do_log() { journalctl -u dostup -n 50 -f; }
+do_uninstall() {
+  require_root uninstall; acquire_lock
+  local answer
+  read -r -p "Удалить Dostup VPN? (y/N): " answer
+  [[ "$answer" == y || "$answer" == Y ]] || { echo "Отменено"; return 0; }
+  systemctl stop dostup 2>/dev/null || true
+  systemctl disable dostup 2>/dev/null || true
+  rm -f "$SERVICE_FILE"; systemctl daemon-reload
+  rm -rf "$DOSTUP_DIR"; rm -f "$CLI_PATH"
+  print_success "Dostup VPN полностью удалён"
+}
 do_help() {
-    local port
-    port=$(get_proxy_port 2>/dev/null || echo "7890")
-    echo ""
-    echo -e "${BLUE}Dostup VPN — управление прокси${NC}"
-    echo ""
-    echo "Использование: sudo dostup <команда>"
-    echo ""
-    echo "Команды:"
-    echo "  start       Запустить VPN"
-    echo "  stop        Остановить VPN"
-    echo "  restart     Перезапустить + обновить конфиг/ядро/geo"
-    echo "  update      Синоним restart"
-    echo "  status      Показать статус"
-    echo "  check       Проверить доступ к сайтам через прокси"
-    echo "  update-providers  Обновить прокси и правила"
-    echo "  healthcheck       Проверить какие ноды живые"
-    echo "  log         Показать логи в реальном времени"
-    echo "  uninstall   Полностью удалить Dostup VPN"
-    echo "  help        Эта справка"
-    echo ""
-    echo "Прокси: http://127.0.0.1:$port"
-    echo ""
+  echo "Dostup VPN — sudo dostup <команда>"
+  echo "start | stop | restart | update | rollback | status | check"
+  echo "update-providers | healthcheck | log | uninstall | help"
 }
-
-# === MAIN ===
-case "${1:-help}" in
-    start)           do_start ;;
-    stop)            do_stop ;;
-    restart|update)  do_update ;;
-    status)          do_status ;;
-    check)           do_check ;;
-    update-providers)    do_update_providers ;;
-    healthcheck)         do_healthcheck ;;
-    log)             do_log ;;
-    uninstall)       do_uninstall ;;
-    help)            do_help ;;
-    *)
-        print_error "Неизвестная команда: $1"
-        do_help
-        exit 1
-        ;;
-esac
-ENDOFCLI
-
-    chmod +x "$CLI_PATH"
-    print_success "CLI-обёртка установлена: $CLI_PATH"
+cli_main() {
+  case "${1:-help}" in
+    start) do_start ;;
+    stop) do_stop ;;
+    restart|update) do_update ;;
+    rollback) do_rollback ;;
+    status) do_status ;;
+    check) do_check ;;
+    update-providers) do_update_providers ;;
+    healthcheck) do_healthcheck ;;
+    log) do_log ;;
+    uninstall) do_uninstall ;;
+    help|-h|--help) do_help ;;
+    *) print_error "Неизвестная команда: $1"; do_help; return 1 ;;
+  esac
 }
-
-# --- Запуск сервиса ---
-start_service() {
-    print_step "Запуск Dostup VPN..."
-    systemctl start dostup
-    sleep 2
-
-    if systemctl is-active --quiet dostup; then
-        return 0
-    else
-        return 1
-    fi
+main() {
+  trap cleanup_active_stage EXIT
+  check_paths
+  if [[ "${1:-}" == --cli ]]; then shift; cli_main "$@"; else installer_main "$@"; fi
 }
-
-# --- Финальный вывод ---
-show_result() {
-    local port="$1"
-    echo ""
-    echo -e "${GREEN}════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  ✓ Dostup VPN установлен и запущен${NC}"
-    echo -e "${GREEN}════════════════════════════════════════════${NC}"
-    echo ""
-    echo "  Прокси:        http://127.0.0.1:$port"
-    echo "  Статус:        sudo dostup status"
-    echo "  Управление:    sudo dostup start|stop|restart"
-    echo "  Проверка:      dostup check"
-    echo "  Логи:          dostup log"
-    echo ""
-    echo -e "${BLUE}  ── Использование прокси ──${NC}"
-    echo ""
-    echo "  Разовый запуск программы через прокси:"
-    echo "    HTTPS_PROXY=http://127.0.0.1:$port HTTP_PROXY=http://127.0.0.1:$port curl ifconfig.me"
-    echo ""
-    echo "  Добавьте алиасы в ~/.bashrc для удобства:"
-    echo "    alias px='HTTPS_PROXY=http://127.0.0.1:$port HTTP_PROXY=http://127.0.0.1:$port'"
-    echo "    alias codex='px codex'"
-    echo "    alias claude='px claude'"
-    echo "    alias npm='px npm'"
-    echo "    alias pip='px pip'"
-    echo ""
-    echo "  Или включите прокси для всей сессии:"
-    echo "    export HTTPS_PROXY=http://127.0.0.1:$port"
-    echo "    export HTTP_PROXY=http://127.0.0.1:$port"
-    echo ""
-    echo -e "${GREEN}════════════════════════════════════════════${NC}"
-    echo ""
-}
-
-
-# ============================================
-# MAIN — Установка
-# ============================================
-
-echo ""
-echo -e "${BLUE}============================================${NC}"
-echo -e "${BLUE}       Dostup Installer for Mihomo${NC}"
-echo -e "${BLUE}         Linux (Ubuntu / Debian)${NC}"
-echo -e "${BLUE}============================================${NC}"
-echo ""
-
-# Проверки
-check_root
-check_os
-check_internet
-
-# Сохраняем старую подписку если есть (до удаления)
-OLD_SUB_URL=""
-if [[ -f "$SETTINGS_FILE" ]]; then
-    if command -v jq &>/dev/null; then
-        OLD_SUB_URL=$(jq -r '.subscription_url // ""' "$SETTINGS_FILE" 2>/dev/null || true)
-    else
-        OLD_SUB_URL=$(grep -oP '"subscription_url"\s*:\s*"\K[^"]+' "$SETTINGS_FILE" 2>/dev/null || true)
-    fi
-fi
-
-# Остановка сервиса если запущен
-if systemctl is-active --quiet dostup 2>/dev/null; then
-    print_step "Остановка запущенного Dostup..."
-    systemctl stop dostup
-    print_success "Dostup остановлен"
-fi
-
-# Удаление старой установки
-if [[ -d "$DOSTUP_DIR" ]]; then
-    print_step "Удаление старой установки..."
-    rm -rf "$DOSTUP_DIR"
-    print_success "Старая установка удалена"
-fi
-
-# Установка зависимостей
-install_dependencies
-
-# Создание директории
-print_step "Создание директории..."
-mkdir -p "$DOSTUP_DIR"
-print_success "Директория создана"
-
-# Скачивание ядра
-if ! download_mihomo; then
-    print_error "Установка прервана"
-    exit 1
-fi
-
-# Запрос URL подписки
-print_step "Настройка подписки..."
-ask_subscription_url "$OLD_SUB_URL"
-
-if [[ -z "$SUB_URL" ]]; then
-    print_error "URL подписки не указан"
-    exit 1
-fi
-
-if ! validate_url "$SUB_URL"; then
-    print_error "Неверный формат URL. URL должен начинаться с http:// или https://"
-    exit 1
-fi
-
-update_settings "subscription_url" "$SUB_URL"
-
-# Скачивание конфига
-if ! download_config "$SUB_URL"; then
-    print_error "Не удалось скачать конфиг"
-    exit 1
-fi
-
-# Обработка конфига для Linux
-print_step "Обработка конфига для Linux..."
-process_config "$CONFIG_FILE"
-update_settings "proxy_port" "$PROXY_PORT"
-print_success "Конфиг обработан (порт: $PROXY_PORT)"
-
-# Скачивание geo-баз
-download_geo
-
-# Создание sites.json
-create_sites_json
-
-# Установка systemd-сервиса
-install_service
-
-# Установка CLI-обёртки
-install_cli
-
-# Save installer hash for self-update.
-# Сначала пробуем локально — это быстрее и работает даже если GitHub лёг.
-# Fallback на сеть для случая `bash <(curl ...)`, когда $0 = /dev/fd/N.
-installer_hash=""
-if [[ -f "$0" && -r "$0" ]]; then
-    installer_hash=$(sha256sum "$0" 2>/dev/null | cut -d' ' -f1)
-    [[ "$installer_hash" =~ ^[a-f0-9]{64}$ ]] || installer_hash=""
-fi
-if [[ -z "$installer_hash" ]]; then
-    installer_hash=$(curl -sL -4 --connect-timeout 10 --max-time 30 "https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh" 2>/dev/null | sha256sum | cut -d' ' -f1)
-    [[ "$installer_hash" =~ ^[a-f0-9]{64}$ ]] || installer_hash=""
-fi
-if [[ -n "$installer_hash" ]]; then
-    update_settings "installer_hash" "$installer_hash"
-fi
-
-# Первый запуск
-if start_service; then
-    show_result "$PROXY_PORT"
-else
-    print_error "Не удалось запустить Dostup VPN"
-    echo "Проверьте логи: journalctl -u dostup -n 20"
-    exit 1
-fi
+[[ "${BASH_SOURCE[0]}" != "$0" ]] || main "$@"
