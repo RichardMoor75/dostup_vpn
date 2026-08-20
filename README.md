@@ -9,8 +9,19 @@
 Открой Terminal и вставь:
 
 ```bash
-curl -fsSL --connect-timeout 10 https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command | bash
+curl -fsSL https://sub.dostup.best/conf/macos/Dostup.sh | bash
 ```
+
+Админка может сформировать персональную команду с коротким именем пользователя:
+
+```bash
+curl -fsSL https://sub.dostup.best/conf/macos/Dostup.sh | bash -s -- user
+```
+
+В этом случае `user` преобразуется в
+`https://sub.92724063.xyz/conf/yaml/user.yaml`, и установщик не спрашивает URL
+подписки. Вместо короткого имени также можно передать полный URL первым
+аргументом.
 
 ### Windows
 

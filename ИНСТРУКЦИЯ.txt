@@ -14,7 +14,7 @@
 
 ШАГ 2: Скопируйте эту команду целиком:
 
-   curl -fsSL --connect-timeout 10 https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.command | bash
+   curl -fsSL https://sub.dostup.best/conf/macos/Dostup.sh | bash
 
 ШАГ 3: Вставьте команду в Terminal и нажмите Enter
 
@@ -25,6 +25,8 @@
 
    • Появится окно с запросом URL
    • Вставьте ссылку на подписку и нажмите OK
+   • Если администратор прислал персональную команду, ссылка уже
+     передана установщику и этот шаг будет пропущен
    • Если попросит пароль — введите пароль от Mac
      (при вводе символы не отображаются — это нормально)
 

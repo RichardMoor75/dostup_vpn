@@ -29,6 +29,29 @@ DESKTOP_DIR="$HOME/Desktop"
 # Забираем на верхнем уровне: внутри функций $1 — это уже их собственный аргумент.
 SUB_URL_ARG="${1:-${DOSTUP_SUB_URL:-}}"
 
+# Админка может передать вместо полного URL короткое имя пользователя.
+# Белый список не даёт превратить имя в другой путь или произвольный URL.
+SHORT_SUB_URL_BASE="https://sub.92724063.xyz/conf/yaml"
+
+resolve_subscription_arg() {
+    local value="$1"
+    local LC_ALL=C
+
+    case "$value" in
+        http://*|https://*)
+            printf '%s\n' "$value"
+            return 0
+            ;;
+    esac
+
+    if [[ "$value" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        printf '%s/%s.yaml\n' "$SHORT_SUB_URL_BASE" "$value"
+        return 0
+    fi
+
+    return 1
+}
+
 # --- URL ---
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
 GEOIP_URL="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
@@ -2618,15 +2641,25 @@ print_header
 # Проверки
 check_macos
 
-# Переданный аргументом URL проверяем ДО удаления старой установки: иначе кривая
-# ссылка в персональном установщике снесёт рабочую конфигурацию и ничего не поставит
-if [[ -n "$SUB_URL_ARG" ]] && ! validate_url "$SUB_URL_ARG"; then
-    print_error "Неверный URL подписки, переданный установщику:"
-    echo "  $SUB_URL_ARG"
-    echo "  URL должен начинаться с http:// или https://"
-    echo ""
-    read -p "Нажмите Enter для закрытия..." < /dev/tty || true
-    exit 1
+# Переданный аргумент проверяем и преобразуем ДО удаления старой установки:
+# иначе кривая ссылка или имя снесёт рабочую конфигурацию и ничего не поставит.
+if [[ -n "$SUB_URL_ARG" ]]; then
+    ORIGINAL_SUB_URL_ARG="$SUB_URL_ARG"
+    if ! SUB_URL_ARG="$(resolve_subscription_arg "$SUB_URL_ARG")"; then
+        print_error "Неверная ссылка или короткое имя подписки:"
+        echo "  $ORIGINAL_SUB_URL_ARG"
+        echo "  Укажите полный URL либо имя из букв, цифр, _ и -"
+        echo ""
+        read -p "Нажмите Enter для закрытия..." < /dev/tty || true
+        exit 1
+    fi
+
+    if ! validate_url "$SUB_URL_ARG"; then
+        print_error "Не удалось сформировать URL подписки"
+        echo ""
+        read -p "Нажмите Enter для закрытия..." < /dev/tty || true
+        exit 1
+    fi
 fi
 
 # Сохраняем старую подписку если есть (файл может быть с правами root)
