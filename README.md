@@ -22,15 +22,15 @@ irm https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-ins
 
 ### Linux (Ubuntu/Debian, сервер)
 
-Скачай и запусти:
+Скачай и запусти одной командой:
 
 ```bash
-{ curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://github.com/RichardMoor75/dostup_vpn/releases/latest/download/dostup-install.sh || curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh; } && sudo bash dostup-install.sh
+curl -fsSLo dostup-install.sh https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.sh && sudo bash dostup-install.sh
 ```
 
-До публикации первого `installer-v*` release команда автоматически использует
-ветку разработки `master`. После публикации будет выбираться стабильный release;
-установленная копия проверяется по SHA-256 digest из GitHub Releases.
+Текущий стабильный Linux-релиз — `installer-v1.0.0`. Установленный менеджер
+проверяет следующие стабильные `installer-v*` releases и принимает asset только
+после сверки SHA-256 digest из GitHub Releases.
 
 ### macOS — персональный установщик (для распространяющего)
 
@@ -162,10 +162,9 @@ sudo systemctl start dostup-update.service
 Ручной `sudo dostup restart`/`update` сохраняет прежнее поведение: сразу
 проверяет обновления и перезапускает сервис после успешной валидации.
 
-Для уже установленного Linux-сервера до публикации первого `installer-v*`
-release нужно один раз повторно выполнить команду установки и выбрать сохранение
-текущей подписки. Это установит timer; последующие обновления менеджера будут
-приходить через проверенные release-артефакты.
+Если Linux-версия была установлена до `installer-v1.0.0`, нужно один раз повторно
+выполнить команду установки выше и выбрать сохранение текущей подписки. Это
+установит timer и актуальный менеджер.
 
 ## Панель управления
 

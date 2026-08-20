@@ -9,11 +9,11 @@
 
 ШАГ 2: Скачайте установочный скрипт
 
-   { curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://github.com/RichardMoor75/dostup_vpn/releases/latest/download/dostup-install.sh || curl -fsSL -4 --connect-timeout 10 -o dostup-install.sh https://raw.githubusercontent.com/RichardMoor75/dostup_vpn/master/dostup-install.sh; }
+   curl -fsSLo dostup-install.sh https://files.richard-moor.ru/Install/dostup_vpn/dostup-install.sh
 
-   До публикации первого installer-v release используется
-   резервный dev-источник master. Затем команда автоматически
-   начнёт брать стабильный release.
+   Текущий стабильный Linux-релиз — installer-v1.0.0.
+   Следующие installer-v releases менеджер принимает только
+   после сверки SHA-256 digest из GitHub Releases.
 
 ШАГ 3: Запустите установку
 
@@ -163,10 +163,9 @@ Dostup автоматически проверяет обновления два
 Включить обратно:
    sudo systemctl enable --now dostup-update.timer
 
-Если Dostup был установлен до появления фоновых обновлений,
-один раз повторно выполните команду установки из ШАГА 2–3
-и выберите сохранение текущей подписки. Обычный restart старого
-менеджера до первого installer-v release сам timer не установит.
+Если Dostup был установлен до installer-v1.0.0, один раз
+повторно выполните команду установки из ШАГА 2–3 и выберите
+сохранение текущей подписки. Это установит новый менеджер и timer.
 
 -------------------------------------
 СМЕНА URL ПОДПИСКИ
