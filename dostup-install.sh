@@ -12,6 +12,8 @@ SITES_FILE="$DOSTUP_DIR/sites.json"
 KNOWN_GOOD_DIR="$DOSTUP_DIR/.known-good"
 CLI_PATH="${DOSTUP_CLI_PATH:-/usr/local/bin/dostup}"
 SERVICE_FILE="${DOSTUP_SERVICE_FILE:-/etc/systemd/system/dostup.service}"
+UPDATE_SERVICE_FILE="${DOSTUP_UPDATE_SERVICE_FILE:-/etc/systemd/system/dostup-update.service}"
+UPDATE_TIMER_FILE="${DOSTUP_UPDATE_TIMER_FILE:-/etc/systemd/system/dostup-update.timer}"
 LOCK_FILE="${DOSTUP_LOCK_FILE:-/run/dostup.lock}"
 
 MIHOMO_RELEASES_API="https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
@@ -27,6 +29,9 @@ MANAGED_FILES=(
   mihomo config.yaml settings.json dostup-manager.sh sites.json
   GeoIP.dat GeoSite.dat ASN.mmdb geoip.dat geosite.dat
   geoip.metadb country.mmdb cache.db
+)
+RESTART_RELEVANT_FILES=(
+  mihomo config.yaml dostup-manager.sh GeoIP.dat GeoSite.dat ASN.mmdb
 )
 
 print_step()    { echo -e "${YELLOW}▶ $1${NC}"; }
@@ -494,12 +499,68 @@ WorkingDirectory=/opt/dostup
 WantedBy=multi-user.target
 EOF
 }
+render_update_service_candidate() {
+  cat > "$1" <<'EOF'
+[Unit]
+Description=Dostup VPN background update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dostup/dostup-manager.sh --cli update-background
+User=root
+WorkingDirectory=/opt/dostup
+Environment=DEBIAN_FRONTEND=noninteractive
+StandardInput=null
+TimeoutStartSec=30min
+EOF
+}
+render_update_timer_candidate() {
+  cat > "$1" <<'EOF'
+[Unit]
+Description=Dostup VPN background update schedule
+
+[Timer]
+OnCalendar=Mon,Thu *-*-* 04:00:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=dostup-update.service
+
+[Install]
+WantedBy=timers.target
+EOF
+}
 render_cli_candidate() {
   cat > "$1" <<'EOF'
 #!/usr/bin/env bash
 exec /opt/dostup/dostup-manager.sh --cli "$@"
 EOF
   chmod 755 "$1"
+}
+render_installation_candidates() {
+  render_service_candidate "$1/service"
+  render_update_service_candidate "$1/update-service"
+  render_update_timer_candidate "$1/update-timer"
+  render_cli_candidate "$1/cli"
+}
+
+file_state_matches() {
+  if [[ -e "$1" && -e "$2" ]]; then
+    cmp -s "$1" "$2"
+  else
+    [[ ! -e "$1" && ! -e "$2" ]]
+  fi
+}
+candidate_requires_restart() {
+  local stage="$1" name
+  for name in "${RESTART_RELEVANT_FILES[@]}"; do
+    file_state_matches "$stage/$name" "$DOSTUP_DIR/$name" || return 0
+  done
+  file_state_matches "$stage/service" "$SERVICE_FILE" || return 0
+  file_state_matches "$stage/update-service" "$UPDATE_SERVICE_FILE" || return 0
+  file_state_matches "$stage/update-timer" "$UPDATE_TIMER_FILE" || return 0
+  return 1
 }
 
 snapshot_live_files() {
@@ -522,6 +583,13 @@ mode_for_file() {
 install_file_atomically() {
   local tmp="${2}.new.$$"
   install -m "$3" "$1" "$tmp"; mv -f "$tmp" "$2"
+}
+restore_optional_file() {
+  if [[ -f "$1" ]]; then
+    install_file_atomically "$1" "$2" "$3"
+  else
+    rm -f "$2"
+  fi
 }
 restore_live_files() {
   local name mode
@@ -593,14 +661,37 @@ merge_runtime_cache() {
   done
 }
 
+commit_nondisruptive_files() {
+  local stage="$1" name mode
+  for name in settings.json sites.json; do
+    if [[ -e "$stage/$name" ]] &&
+       ! file_state_matches "$stage/$name" "$DOSTUP_DIR/$name"; then
+      mode=$(mode_for_file "$name")
+      install_file_atomically "$stage/$name" "$DOSTUP_DIR/$name" "$mode"
+    fi
+  done
+  if ! file_state_matches "$stage/cli" "$CLI_PATH"; then
+    install_file_atomically "$stage/cli" "$CLI_PATH" 755
+  fi
+}
+
 commit_candidate() {
-  local stage="$1" had_previous=false was_active=false name mode
+  local stage="$1" had_previous=false was_active=false
+  local timer_was_active=false timer_was_enabled=false name mode
+  render_installation_candidates "$stage"
   [[ -x "$MIHOMO_BIN" && -s "$CONFIG_FILE" ]] && had_previous=true
   systemctl is-active --quiet dostup 2>/dev/null && was_active=true
+  systemctl is-active --quiet dostup-update.timer 2>/dev/null &&
+    timer_was_active=true
+  systemctl is-enabled --quiet dostup-update.timer 2>/dev/null &&
+    timer_was_enabled=true
   mkdir -p "$stage/previous"; snapshot_live_files "$stage/previous/live"
   [[ -f "$SERVICE_FILE" ]] && cp -aL "$SERVICE_FILE" "$stage/previous/service"
+  [[ -f "$UPDATE_SERVICE_FILE" ]] &&
+    cp -aL "$UPDATE_SERVICE_FILE" "$stage/previous/update-service"
+  [[ -f "$UPDATE_TIMER_FILE" ]] &&
+    cp -aL "$UPDATE_TIMER_FILE" "$stage/previous/update-timer"
   [[ -f "$CLI_PATH" ]] && cp -aL "$CLI_PATH" "$stage/previous/cli"
-  render_service_candidate "$stage/service"; render_cli_candidate "$stage/cli"
 
   print_step "Короткая остановка для атомарной подмены..."
   systemctl stop dostup 2>/dev/null || true
@@ -612,26 +703,42 @@ commit_candidate() {
   done
   merge_runtime_cache "$stage/runtime"
   install_file_atomically "$stage/service" "$SERVICE_FILE" 644
+  install_file_atomically "$stage/update-service" "$UPDATE_SERVICE_FILE" 644
+  install_file_atomically "$stage/update-timer" "$UPDATE_TIMER_FILE" 644
   install_file_atomically "$stage/cli" "$CLI_PATH" 755
-  systemctl daemon-reload
-  systemctl enable dostup >/dev/null 2>&1
-  systemctl start dostup
-
-  if ! hard_healthcheck; then
+  if ! systemctl daemon-reload ||
+     ! systemctl enable dostup >/dev/null 2>&1 ||
+     ! systemctl enable dostup-update.timer >/dev/null 2>&1 ||
+     ! systemctl start dostup ||
+     ! hard_healthcheck ||
+     ! systemctl start dostup-update.timer; then
     print_error "Новая версия локально неисправна; выполняется rollback"
     systemctl stop dostup 2>/dev/null || true
+    if ! $had_previous; then
+      systemctl disable dostup >/dev/null 2>&1 || true
+    fi
+    if ! $timer_was_enabled; then
+      systemctl disable --now dostup-update.timer >/dev/null 2>&1 || true
+    elif ! $timer_was_active; then
+      systemctl stop dostup-update.timer 2>/dev/null || true
+    fi
     restore_live_files "$stage/previous/live"
-    if [[ -f "$stage/previous/service" ]]; then
-      install_file_atomically "$stage/previous/service" "$SERVICE_FILE" 644
-    else
-      rm -f "$SERVICE_FILE"
-    fi
-    if [[ -f "$stage/previous/cli" ]]; then
-      install_file_atomically "$stage/previous/cli" "$CLI_PATH" 755
-    else
-      rm -f "$CLI_PATH"
-    fi
+    restore_optional_file "$stage/previous/service" "$SERVICE_FILE" 644
+    restore_optional_file "$stage/previous/update-service" \
+      "$UPDATE_SERVICE_FILE" 644
+    restore_optional_file "$stage/previous/update-timer" "$UPDATE_TIMER_FILE" 644
+    restore_optional_file "$stage/previous/cli" "$CLI_PATH" 755
     systemctl daemon-reload
+    if $timer_was_enabled; then
+      systemctl enable dostup-update.timer >/dev/null 2>&1 || true
+    else
+      systemctl disable dostup-update.timer >/dev/null 2>&1 || true
+    fi
+    if $timer_was_active; then
+      systemctl start dostup-update.timer 2>/dev/null || true
+    else
+      systemctl stop dostup-update.timer 2>/dev/null || true
+    fi
     if $was_active; then
       systemctl start dostup
       if hard_healthcheck; then
@@ -652,7 +759,7 @@ commit_candidate() {
   soft_post_update_check
 }
 prepare_and_commit() {
-  local stage
+  local stage mode="${2:-manual}"
   stage=$(create_stage); ACTIVE_STAGE="$stage"
   seed_candidate "$stage"
   prepare_mihomo_candidate "$stage" || return 1
@@ -660,7 +767,14 @@ prepare_and_commit() {
   prepare_geo_candidate "$stage"
   prepare_manager_candidate "$stage" || return 1
   create_sites_candidate "$stage"
+  render_installation_candidates "$stage"
   validate_candidate_with_mihomo "$stage" || return 1
+  if [[ "$mode" == background ]] && ! candidate_requires_restart "$stage"; then
+    commit_nondisruptive_files "$stage"
+    rm -rf "$stage"; ACTIVE_STAGE=""
+    print_success "Значимых обновлений нет; перезапуск не требуется"
+    return 0
+  fi
   commit_candidate "$stage" || return 1
   rm -rf "$stage"; ACTIVE_STAGE=""
 }
@@ -688,6 +802,7 @@ show_result() {
   echo "  Статус:        sudo dostup status"
   echo "  Управление:    sudo dostup start|stop|restart"
   echo "  Откат:         sudo dostup rollback"
+  echo "  Автообновление: понедельник и четверг около 04:00"
   echo "  Проверка:      dostup check"
   echo "  Логи:          dostup log"; echo
 }
@@ -729,6 +844,13 @@ do_update() {
   require_root update; acquire_lock; install_dependencies; migrate_legacy_runtime
   prepare_and_commit "$(read_settings subscription_url)"
   print_success "Обновление завершено"
+}
+do_background_update() {
+  require_root update-background; acquire_lock
+  export DEBIAN_FRONTEND=noninteractive
+  install_dependencies; migrate_legacy_runtime
+  prepare_and_commit "$(read_settings subscription_url)" background
+  print_success "Фоновое обновление завершено"
 }
 do_status() {
   echo
@@ -830,9 +952,13 @@ do_uninstall() {
   local answer
   read -r -p "Удалить Dostup VPN? (y/N): " answer
   [[ "$answer" == y || "$answer" == Y ]] || { echo "Отменено"; return 0; }
+  systemctl disable --now dostup-update.timer 2>/dev/null || true
+  systemctl stop dostup-update.service 2>/dev/null || true
+  systemctl clean --what=state dostup-update.timer 2>/dev/null || true
   systemctl stop dostup 2>/dev/null || true
   systemctl disable dostup 2>/dev/null || true
-  rm -f "$SERVICE_FILE"; systemctl daemon-reload
+  rm -f "$SERVICE_FILE" "$UPDATE_SERVICE_FILE" "$UPDATE_TIMER_FILE"
+  systemctl daemon-reload
   rm -rf "$DOSTUP_DIR"; rm -f "$CLI_PATH"
   print_success "Dostup VPN полностью удалён"
 }
@@ -846,6 +972,7 @@ cli_main() {
     start) do_start ;;
     stop) do_stop ;;
     restart|update) do_update ;;
+    update-background) do_background_update ;;
     rollback) do_rollback ;;
     status) do_status ;;
     check) do_check ;;

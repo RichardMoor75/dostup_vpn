@@ -134,6 +134,41 @@ VPN работает как локальный прокси на порту 7890
 ошибке запуска выполняется автоматический rollback.
 
 -------------------------------------
+ФОНОВЫЕ ОБНОВЛЕНИЯ
+-------------------------------------
+Dostup автоматически проверяет обновления дважды в неделю:
+   • в понедельник и четверг около 04:00;
+   • используется локальное время сервера;
+   • к времени добавляется случайная задержка до 30 минут;
+   • пропущенная проверка выполняется после загрузки сервера.
+
+Проверяются менеджер, ядро Mihomo, профиль и Geo-базы.
+Если значимых изменений нет, работающий VPN не перезапускается.
+Если один источник недоступен, остальные безопасные обновления
+всё равно могут быть применены.
+
+Проверить расписание:
+   systemctl status dostup-update.timer
+   systemctl list-timers dostup-update.timer
+
+Посмотреть журнал последних проверок:
+   journalctl -u dostup-update -n 100
+
+Запустить фоновую проверку вручную:
+   sudo systemctl start dostup-update.service
+
+Отключить автоматические проверки:
+   sudo systemctl disable --now dostup-update.timer
+
+Включить обратно:
+   sudo systemctl enable --now dostup-update.timer
+
+Если Dostup был установлен до появления фоновых обновлений,
+один раз повторно выполните команду установки из ШАГА 2–3
+и выберите сохранение текущей подписки. Обычный restart старого
+менеджера до первого installer-v release сам timer не установит.
+
+-------------------------------------
 СМЕНА URL ПОДПИСКИ
 -------------------------------------
 Если нужно изменить подписку:
@@ -185,9 +220,13 @@ Mihomo падает после обновления:
 Выполните: sudo dostup uninstall
 
 Или вручную:
+   sudo systemctl disable --now dostup-update.timer
+   sudo systemctl stop dostup-update.service
    sudo systemctl stop dostup
    sudo systemctl disable dostup
-   sudo rm -f /etc/systemd/system/dostup.service
+   sudo rm -f /etc/systemd/system/dostup.service \
+      /etc/systemd/system/dostup-update.service \
+      /etc/systemd/system/dostup-update.timer
    sudo systemctl daemon-reload
    sudo rm -rf /opt/dostup
    sudo rm -f /usr/local/bin/dostup
