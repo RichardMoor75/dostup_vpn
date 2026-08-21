@@ -370,6 +370,34 @@ secure_config() {
     return 0
 }
 
+# Полная проверка профиля настоящим ядром. Mihomo получает отдельную runtime-
+# директорию, чтобы проверка не меняла cache.db работающей установки.
+validate_mihomo_config() {
+    local core="$1" config="$2"
+    local runtime log rc name dir
+
+    [[ -x "$core" && -s "$config" ]] || return 1
+    runtime=$(mktemp -d "${TMPDIR:-/tmp}/dostup-validate.XXXXXX") || return 1
+    log="$LOGS_DIR/mihomo-validation.log"
+    mkdir -p "$LOGS_DIR"
+
+    for name in GeoIP.dat GeoSite.dat ASN.mmdb geoip.dat geosite.dat \
+        geoip.metadb country.mmdb cache.db; do
+        [[ -f "$DOSTUP_DIR/$name" ]] && cp -p "$DOSTUP_DIR/$name" "$runtime/$name"
+    done
+    for dir in proxies rules proxy_provider rule_provider; do
+        [[ -d "$DOSTUP_DIR/$dir" ]] && cp -R "$DOSTUP_DIR/$dir" "$runtime/$dir"
+    done
+
+    if "$core" -t -d "$runtime" -f "$config" >"$log" 2>&1; then
+        rc=0
+    else
+        rc=1
+    fi
+    rm -rf "$runtime"
+    return "$rc"
+}
+
 # Бэкап конфига
 backup_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -543,6 +571,8 @@ LOCK_DIR="$DOSTUP_DIR/.lock"
 NOTIFY_FILE="$DOSTUP_DIR/.notify"
 SCRIPT_UPDATE_FLAG="$DOSTUP_DIR/.script-update"
 CORE_PENDING="$DOSTUP_DIR/mihomo.new"
+CORE_BACKUP="$DOSTUP_DIR/mihomo.backup"
+CORE_APPLY_RESTARTED=false
 
 # --- Utility ---
 close_terminal_window() {
@@ -750,6 +780,33 @@ secure_config() {
     return 0
 }
 
+# Проверяем профиль настоящим ядром в изолированной runtime-директории.
+validate_mihomo_config() {
+    local core="$1" config="$2"
+    local runtime log rc name dir
+
+    [[ -x "$core" && -s "$config" ]] || return 1
+    runtime=$(mktemp -d "${TMPDIR:-/tmp}/dostup-validate.XXXXXX") || return 1
+    log="$DOSTUP_DIR/logs/mihomo-validation.log"
+    mkdir -p "$DOSTUP_DIR/logs"
+
+    for name in GeoIP.dat GeoSite.dat ASN.mmdb geoip.dat geosite.dat \
+        geoip.metadb country.mmdb cache.db; do
+        [[ -f "$DOSTUP_DIR/$name" ]] && cp -p "$DOSTUP_DIR/$name" "$runtime/$name"
+    done
+    for dir in proxies rules proxy_provider rule_provider; do
+        [[ -d "$DOSTUP_DIR/$dir" ]] && cp -R "$DOSTUP_DIR/$dir" "$runtime/$dir"
+    done
+
+    if "$core" -t -d "$runtime" -f "$config" >"$log" 2>&1; then
+        rc=0
+    else
+        rc=1
+    fi
+    rm -rf "$runtime"
+    return "$rc"
+}
+
 # --- Плановое обновление: инфраструктура ---
 
 log_updater() {
@@ -830,6 +887,14 @@ update_profile() {
 
     secure_config "$tmp"
 
+    # Поверхностной проверки YAML недостаточно: до замены рабочего файла
+    # действующее ядро должно принять профиль целиком.
+    if ! validate_mihomo_config "$MIHOMO_BIN" "$tmp"; then
+        log_updater "profile: mihomo отклонил кандидат, рабочий профиль сохранён"
+        rm -f "$tmp"
+        return 2
+    fi
+
     new_hash=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
     old_hash=$(shasum -a 256 "$CONFIG_FILE" 2>/dev/null | cut -d' ' -f1)
     if [[ -n "$old_hash" && "$new_hash" == "$old_hash" ]]; then
@@ -881,25 +946,31 @@ update_geo_if_due() {
     return 1
 }
 
-# Предзагрузка ядра рядом с работающим: перезаписать выполняющийся файл нельзя,
-# поэтому качаем в mihomo.new, а подменяем при следующем старте (promote_core).
+# Загрузка ядра рядом с работающим. Кандидат проверяется до остановки VPN.
+# 0 — кандидат готов к применению, 1 — обновления нет, 2 — ошибка.
 preload_core() {
     local current latest pending arch assets filename url
     current=$(read_settings "installed_version")
     latest=$(get_latest_version)
     if [[ -z "$latest" ]]; then
         log_updater "core: не удалось получить последнюю версию"
-        return 1
+        return 2
     fi
     if [[ "$current" == "$latest" ]]; then
         rm -f "$CORE_PENDING"
+        update_settings "pending_core_version" ""
         log_updater "core: актуально ($current)"
         return 1
     fi
     pending=$(read_settings "pending_core_version")
     if [[ "$pending" == "$latest" && -f "$CORE_PENDING" ]]; then
-        log_updater "core: $latest уже скачано, ждёт перезапуска"
-        return 1
+        if validate_mihomo_config "$CORE_PENDING" "$CONFIG_FILE"; then
+            log_updater "core: $latest уже скачано и проверено"
+            return 0
+        fi
+        log_updater "core: ранее скачанный кандидат $latest не прошёл проверку"
+        rm -f "$CORE_PENDING"
+        update_settings "pending_core_version" ""
     fi
 
     arch=$(uname -m)
@@ -907,45 +978,130 @@ preload_core() {
     assets=$(get_release_assets "$latest")
     if ! filename=$(resolve_mihomo_filename "$arch" "$latest" "$assets"); then
         log_updater "core: нет совместимого бинарника для этой версии macOS"
-        return 1
+        return 2
     fi
     url="https://github.com/MetaCubeX/mihomo/releases/download/${latest}/${filename}"
     if ! download_with_retry "$url" "${CORE_PENDING}.gz"; then
         log_updater "core: не удалось скачать $latest"
         rm -f "${CORE_PENDING}.gz"
-        return 1
+        return 2
     fi
     if ! verify_mihomo_checksum "$latest" "$filename" "${CORE_PENDING}.gz" >/dev/null 2>&1; then
         log_updater "core: ошибка проверки хэша"
         rm -f "${CORE_PENDING}.gz"
-        return 1
+        return 2
     fi
     rm -f "$CORE_PENDING"
     if ! gunzip -f "${CORE_PENDING}.gz"; then
         log_updater "core: ошибка распаковки"
         rm -f "${CORE_PENDING}.gz" "$CORE_PENDING"
-        return 1
+        return 2
     fi
     chmod +x "$CORE_PENDING"
     xattr -d com.apple.quarantine "$CORE_PENDING" 2>/dev/null || true
+
+    if ! validate_mihomo_config "$CORE_PENDING" "$CONFIG_FILE"; then
+        log_updater "core: $latest несовместимо с текущим профилем"
+        rm -f "$CORE_PENDING"
+        update_settings "pending_core_version" ""
+        return 2
+    fi
+
     update_settings "pending_core_version" "$latest"
-    log_updater "core: $latest скачано, применится при следующем запуске"
+    log_updater "core: $latest скачано и проверено"
     return 0
 }
 
-# Подмена ядра предзагруженным. Вызывается при старте, когда mihomo остановлен.
-promote_core() {
-    local pending
-    [[ -f "$CORE_PENDING" ]] || return 1
-    pgrep -x "mihomo" > /dev/null && return 1
+# Проверка локального API после запуска. Код 401 тоже означает, что новое ядро
+# поднялось; авторизация API может быть включена самим профилем.
+wait_mihomo_api() {
+    local waited=0 code
+    while [[ $waited -lt 15 ]]; do
+        if ! pgrep -x "mihomo" > /dev/null; then
+            return 1
+        fi
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 \
+            "${API_BASE}/version" 2>/dev/null || true)
+        [[ "$code" == "200" || "$code" == "401" ]] && return 0
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 1
+}
+
+# Атомарное применение проверенного ядра. Если VPN работал, он сразу
+# перезапускается; при любой ошибке возвращается предыдущий бинарник.
+# 0 — применено, 1 — кандидата нет, 2 — обновление отменено/выполнен откат.
+apply_pending_core() {
+    local pending previous was_running=false
+    CORE_APPLY_RESTARTED=false
+    [[ -x "$CORE_PENDING" ]] || return 1
+
     pending=$(read_settings "pending_core_version")
-    mv "$CORE_PENDING" "$MIHOMO_BIN" || return 1
+    previous=$(read_settings "installed_version")
+    if ! validate_mihomo_config "$CORE_PENDING" "$CONFIG_FILE"; then
+        log_updater "core: кандидат ${pending:-новый} отклонён перед применением"
+        rm -f "$CORE_PENDING"
+        update_settings "pending_core_version" ""
+        return 2
+    fi
+
+    if pgrep -x "mihomo" > /dev/null; then
+        was_running=true
+        if ! do_stop >/dev/null 2>&1; then
+            log_updater "core: не удалось остановить VPN, рабочее ядро сохранено"
+            return 2
+        fi
+    fi
+
+    rm -f "$CORE_BACKUP"
+    if [[ -f "$MIHOMO_BIN" ]] && ! cp -p "$MIHOMO_BIN" "$CORE_BACKUP"; then
+        log_updater "core: не удалось создать резервную копию"
+        $was_running && do_start_quick --skip-promote >/dev/null 2>&1 || true
+        return 2
+    fi
+    if ! mv "$CORE_PENDING" "$MIHOMO_BIN"; then
+        log_updater "core: не удалось установить кандидат"
+        rm -f "$CORE_BACKUP"
+        $was_running && do_start_quick --skip-promote >/dev/null 2>&1 || true
+        return 2
+    fi
     chmod +x "$MIHOMO_BIN"
     xattr -d com.apple.quarantine "$MIHOMO_BIN" 2>/dev/null || true
+
+    if $was_running; then
+        if do_start_quick --skip-promote >/dev/null 2>&1 && wait_mihomo_api; then
+            CORE_APPLY_RESTARTED=true
+        else
+            log_updater "core: новое ядро не прошло проверку запуска, откат"
+            do_stop >/dev/null 2>&1 || true
+            if [[ -f "$CORE_BACKUP" ]]; then
+                mv "$CORE_BACKUP" "$MIHOMO_BIN"
+                chmod +x "$MIHOMO_BIN"
+            fi
+            [[ -n "$previous" ]] && update_settings "installed_version" "$previous"
+            update_settings "pending_core_version" ""
+            if ! do_start_quick --skip-promote >/dev/null 2>&1 || ! wait_mihomo_api; then
+                log_updater "core: КРИТИЧНО — предыдущее ядро восстановлено, но VPN не запустился"
+            else
+                log_updater "core: предыдущее ядро восстановлено и запущено"
+            fi
+            return 2
+        fi
+    fi
+
+    rm -f "$CORE_BACKUP"
     [[ -n "$pending" ]] && update_settings "installed_version" "$pending"
     update_settings "pending_core_version" ""
     log_updater "core: применена версия ${pending:-новая}"
     return 0
+}
+
+# Совместимость с уже скачанным mihomo.new из предыдущей версии скрипта.
+promote_core() {
+    [[ -x "$CORE_PENDING" ]] || return 1
+    pgrep -x "mihomo" > /dev/null && return 1
+    apply_pending_core
 }
 
 # Проверка обновления самого скрипта. 0 — обновление найдено ВПЕРВЫЕ (нужно уведомить)
@@ -975,13 +1131,15 @@ check_script_update_flag() {
 
 # Обновление провайдеров прокси и правил через API. Печатает краткий итог.
 refresh_providers() {
-    local names name ok fail
+    local names name ok fail code
     ok=0
     fail=0
     names=$(get_proxy_providers)
     if [ -n "$names" ]; then
         while IFS= read -r name; do
-            if curl -s -X PUT --max-time 15 "${API_BASE}/providers/proxies/$name" >/dev/null 2>&1; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT --max-time 15 \
+                "${API_BASE}/providers/proxies/$name" 2>/dev/null || true)
+            if [[ "$code" == "200" || "$code" == "204" ]]; then
                 ok=$((ok + 1))
             else
                 fail=$((fail + 1))
@@ -991,7 +1149,9 @@ refresh_providers() {
     names=$(get_rule_providers)
     if [ -n "$names" ]; then
         while IFS= read -r name; do
-            if curl -s -X PUT --max-time 15 "${API_BASE}/providers/rules/$name" >/dev/null 2>&1; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT --max-time 15 \
+                "${API_BASE}/providers/rules/$name" 2>/dev/null || true)
+            if [[ "$code" == "200" || "$code" == "204" ]]; then
                 ok=$((ok + 1))
             else
                 fail=$((fail + 1))
@@ -1223,39 +1383,31 @@ do_stop() {
 
 do_update_core() {
     echo -e "${YELLOW}▶ Проверка обновлений ядра...${NC}"
-    current_version=$(read_settings "installed_version")
-    latest_version=$(get_latest_version)
-    local assets
-    local filename
+    local preload_result apply_result
 
-    if [[ -n "$latest_version" && "$current_version" != "$latest_version" ]]; then
-        echo -e "${YELLOW}▶ Обновление ядра: $current_version → $latest_version${NC}"
-        arch=$(uname -m)
-        [[ "$arch" == "arm64" ]] && arch="arm64" || arch="amd64"
-        assets=$(get_release_assets "$latest_version")
-        if ! filename=$(resolve_mihomo_filename "$arch" "$latest_version" "$assets"); then
-            echo -e "${RED}✗ Не удалось подобрать совместимый бинарник для этой версии macOS${NC}"
-            return 0
-        fi
-        download_url="https://github.com/MetaCubeX/mihomo/releases/download/${latest_version}/${filename}"
-
-        if download_with_retry "$download_url" "$DOSTUP_DIR/mihomo.gz"; then
-            if verify_mihomo_checksum "$latest_version" "$filename" "$DOSTUP_DIR/mihomo.gz"; then
-                gunzip -f "$DOSTUP_DIR/mihomo.gz"
-                chmod +x "$MIHOMO_BIN"
-                xattr -d com.apple.quarantine "$MIHOMO_BIN" 2>/dev/null || true
-                update_settings "installed_version" "$latest_version"
-                echo -e "${GREEN}✓ Ядро обновлено${NC}"
+    preload_core
+    preload_result=$?
+    case "$preload_result" in
+        0)
+            apply_pending_core
+            apply_result=$?
+            if [[ "$apply_result" -eq 0 ]]; then
+                if $CORE_APPLY_RESTARTED; then
+                    echo -e "${GREEN}✓ Ядро обновлено, VPN перезапущен${NC}"
+                else
+                    echo -e "${GREEN}✓ Ядро обновлено, VPN оставлен остановленным${NC}"
+                fi
             else
-                rm -f "$DOSTUP_DIR/mihomo.gz"
-                echo -e "${RED}✗ Ошибка проверки хэша, используем текущую версию${NC}"
+                echo -e "${RED}✗ Обновление ядра отменено, рабочая версия сохранена${NC}"
             fi
-        else
-            echo -e "${RED}✗ Не удалось обновить ядро, используем текущую версию${NC}"
-        fi
-    else
-        echo -e "${GREEN}✓ Ядро актуально${NC}"
-    fi
+            ;;
+        1)
+            echo -e "${GREEN}✓ Ядро актуально${NC}"
+            ;;
+        *)
+            echo -e "${RED}✗ Не удалось подготовить обновление, рабочая версия сохранена${NC}"
+            ;;
+    esac
 }
 
 do_update_config() {
@@ -1268,8 +1420,14 @@ do_update_config() {
         if download_with_retry "$sub_url" "$temp_config"; then
             if validate_yaml "$temp_config"; then
                 secure_config "$temp_config"
-                mv "$temp_config" "$CONFIG_FILE"
-                echo -e "${GREEN}✓ Конфиг обновлён${NC}"
+                if validate_mihomo_config "$MIHOMO_BIN" "$temp_config"; then
+                    mv "$temp_config" "$CONFIG_FILE"
+                    echo -e "${GREEN}✓ Конфиг обновлён и проверен${NC}"
+                else
+                    echo -e "${RED}✗ Mihomo отклонил новый конфиг, используем старый${NC}"
+                    rm -f "$temp_config"
+                    [[ -f "${CONFIG_FILE}.backup" ]] && mv "${CONFIG_FILE}.backup" "$CONFIG_FILE"
+                fi
             else
                 echo -e "${RED}✗ Конфиг невалидный YAML, используем старый${NC}"
                 rm -f "$temp_config"
@@ -1285,7 +1443,7 @@ do_update_config() {
 }
 
 do_start_quick() {
-    promote_core || true
+    [[ "${1:-}" == "--skip-promote" ]] || promote_core || true
 
     # Настройка Application Firewall
     sudo -n /usr/libexec/ApplicationFirewall/socketfilterfw --add "$MIHOMO_BIN" 2>/dev/null || true
@@ -1450,6 +1608,20 @@ if [[ -n "$1" ]]; then
             esac
             update_geo_if_due
             preload_core
+            core_prepare_result=$?
+            if [[ "$core_prepare_result" -eq 0 ]]; then
+                apply_pending_core
+                core_apply_result=$?
+                if [[ "$core_apply_result" -eq 0 ]]; then
+                    if $CORE_APPLY_RESTARTED; then
+                        notify_user "Ядро обновлено, VPN автоматически перезапущен"
+                    else
+                        notify_user "Ядро обновлено, VPN оставлен остановленным"
+                    fi
+                elif [[ "$core_apply_result" -eq 2 ]]; then
+                    notify_user "Обновление ядра отменено, рабочая версия сохранена"
+                fi
+            fi
             check_script_update_flag && \
                 notify_user "@ACTION@Доступно обновление Dostup VPN — нажмите, чтобы обновить"
             exit 0
@@ -1755,7 +1927,7 @@ create_desktop_shortcuts() {
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>LSMinimumSystemVersion</key>
-    <string>10.15</string>
+    <string>10.13</string>
 </dict>
 </plist>
 PLIST
@@ -1771,6 +1943,72 @@ LAUNCHER
     print_success "Приложение Dostup_VPN создано в ~/Applications"
 }
 
+# Готовый Swift-бинарник собран с deployment target 10.15 для Intel и 11.0
+# для Apple Silicon. На более старом Mac VPN остаётся доступен через
+# ~/Applications/Dostup_VPN.app.
+statusbar_supported_on_this_macos() {
+    local version major minor arch
+    version=$(sw_vers -productVersion 2>/dev/null || true)
+    major=${version%%.*}
+    minor=${version#*.}; minor=${minor%%.*}
+    arch=$(uname -m)
+
+    # Если версию определить не удалось, безопаснее попробовать запуск и
+    # положиться на runtime-проверку ниже.
+    [[ "$major" =~ ^[0-9]+$ ]] || return 0
+    if [[ "$arch" == "arm64" ]]; then
+        [[ "$major" -ge 11 ]]
+    else
+        [[ "$major" -gt 10 ]] || \
+            { [[ "$major" -eq 10 ]] && [[ "${minor:-0}" -ge 15 ]]; }
+    fi
+}
+
+verify_statusbar_app() {
+    local app_path="$1" waited=0 pid
+    local binary_path="$app_path/Contents/MacOS/DostupVPN-StatusBar"
+    local launch_log="$LOGS_DIR/statusbar-launch.log"
+    mkdir -p "$LOGS_DIR"
+    : > "$launch_log"
+    pkill -x "DostupVPN-StatusBar" 2>/dev/null || true
+
+    # Первый запуск напрямую сохраняет сообщение dyld о недостающей библиотеке.
+    # Затем приложение перезапускается через LaunchServices для правильной
+    # bundle identity и уведомлений.
+    [[ -x "$binary_path" ]] || return 1
+    "$binary_path" >>"$launch_log" 2>&1 &
+    pid=$!
+    sleep 3
+    if ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" 2>/dev/null || true
+        return 1
+    fi
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+
+    if ! /usr/bin/open -a "$app_path" 2>>"$launch_log"; then
+        return 1
+    fi
+    while [[ $waited -lt 8 ]]; do
+        sleep 1
+        waited=$((waited + 1))
+        if [[ $waited -ge 3 ]] && pgrep -x "DostupVPN-StatusBar" > /dev/null; then
+            # Процесс должен пережить ещё один цикл: так ловятся ошибки dyld,
+            # при которых приложение появляется и сразу завершается.
+            sleep 2
+            pgrep -x "DostupVPN-StatusBar" > /dev/null && return 0
+        fi
+    done
+    return 1
+}
+
+disable_statusbar_app() {
+    local plist="$HOME/Library/LaunchAgents/ru.dostup.vpn.statusbar.plist"
+    launchctl unload "$plist" 2>/dev/null || true
+    rm -f "$plist"
+    pkill -x "DostupVPN-StatusBar" 2>/dev/null || true
+}
+
 # Создание menu bar приложения
 create_statusbar_app() {
     print_step "Создание menu bar приложения..."
@@ -1781,6 +2019,16 @@ create_statusbar_app() {
     mkdir -p "$statusbar_dir"
     mkdir -p "$app_path/Contents/MacOS"
     mkdir -p "$app_path/Contents/Resources"
+
+    if ! statusbar_supported_on_this_macos; then
+        local macos_version
+        macos_version=$(sw_vers -productVersion 2>/dev/null || echo "неизвестна")
+        print_warning "Menu bar недоступен на macOS $macos_version"
+        print_info "VPN будет работать через приложение Dostup_VPN"
+        disable_statusbar_app
+        rm -rf "$statusbar_dir"
+        return 0
+    fi
 
     # Иконки для статусбара уже скачаны в download_icon()
     # Копируем иконку приложения для уведомлений
@@ -2360,8 +2608,14 @@ SBPLIST
         fi
         if $compile_ok; then
             xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
-            installed=true
-            print_success "Menu bar приложение скомпилировано"
+            chmod +x "$binary_path"
+            if verify_statusbar_app "$app_path"; then
+                installed=true
+                print_success "Menu bar приложение скомпилировано и запущено"
+            else
+                print_warning "Скомпилированное menu bar приложение не запустилось"
+                rm -f "$binary_path"
+            fi
         else
             print_warning "Не удалось скомпилировать menu bar приложение, попытка скачивания..."
             if [[ -s "$statusbar_build_log" ]]; then
@@ -2379,8 +2633,14 @@ SBPLIST
             chmod +x "$binary_path"
             xattr -d com.apple.quarantine "$binary_path" 2>/dev/null || true
             xattr -d com.apple.quarantine "$app_path" 2>/dev/null || true
-            installed=true
-            print_success "Menu bar приложение скачано"
+            if verify_statusbar_app "$app_path"; then
+                installed=true
+                print_success "Menu bar приложение скачано и запущено"
+            else
+                print_warning "Готовое menu bar приложение несовместимо с этой macOS"
+                print_info "Лог запуска: $LOGS_DIR/statusbar-launch.log"
+                rm -f "$binary_path"
+            fi
         else
             print_warning "Не удалось скачать готовый бинарник menu bar приложения"
         fi
@@ -2393,6 +2653,7 @@ SBPLIST
     else
         print_warning "Menu bar приложение не установлено"
         print_info "VPN будет работать через приложение Dostup_VPN"
+        disable_statusbar_app
         rm -rf "$statusbar_dir"
     fi
 }
@@ -2434,8 +2695,9 @@ LAPLIST
 }
 
 # LaunchAgent планового обновления: профиль, geo-базы, ядро, проверка скрипта.
-# Раз в 6 часов от пользователя — sudo не нужен нигде, всё через API на 127.0.0.1
-# и файлы в ~/dostup. Пропущенный из-за сна интервал launchd отработает при пробуждении.
+# Раз в 6 часов от пользователя. Для короткого перезапуска ядра используются
+# только заранее разрешённые sudoers-команды без запроса пароля. Пропущенный
+# из-за сна интервал launchd отработает при пробуждении.
 create_updater_agent() {
     print_step "Настройка планового обновления (раз в 6 часов)..."
 
@@ -2783,6 +3045,16 @@ fi
 
 # Скачивание geo-баз и иконки
 download_assets
+
+# Финальная проверка связки ядра и профиля до создания/запуска сервиса.
+print_step "Проверка профиля через Mihomo..."
+if ! validate_mihomo_config "$MIHOMO_BIN" "$CONFIG_FILE"; then
+    print_error "Mihomo отклонил профиль"
+    echo "Рабочие файлы не будут запущены. Подробности: $LOGS_DIR/mihomo-validation.log"
+    read -p "Нажмите Enter для закрытия..." < /dev/tty || true
+    exit 1
+fi
+print_success "Ядро и профиль совместимы"
 
 # Создание sites.json
 create_sites_json
